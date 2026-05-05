@@ -1,0 +1,204 @@
+"""
+타격 궤적 생성기
+==================
+미니골프/포켓볼 공통 타격 궤적을 3단계로 생성:
+  1. Approach: 현재 위치 → 타격 준비 위치 (cubic time scaling)
+  2. Strike: 준비 위치 → 공 (일정 속도 직선)
+  3. Follow-through: 공 관통 후 감속
+"""
+import numpy as np
+import sys
+import os
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from src.utils import (
+    xyzeul2SE3, Rot2Vec, Vec2Rot, eul2Rot, Rot2eul
+)
+
+
+def _cubic_time_scaling(T_total, num_points):
+    """Cubic polynomial time scaling: s(0)=0, s(T)=1, s'(0)=s'(T)=0
+
+    Returns:
+        s_array: (num_points,) array of scaling values [0, 1]
+    """
+    a = np.linalg.solve(
+        [[1, 0, 0, 0],
+         [1, T_total, T_total**2, T_total**3],
+         [0, 1, 0, 0],
+         [0, 1, 2*T_total, 3*T_total**2]],
+        [0, 1, 0, 0]
+    )
+    s_array = np.zeros(num_points)
+    for i in range(num_points):
+        t = T_total * (i + 1) / num_points
+        s_array[i] = np.dot(a, [1, t, t**2, t**3])
+    return s_array
+
+
+def interpolate_SE3_decoupled(T_start, T_end, s):
+    """Decoupled position/orientation interpolation"""
+    p_start = T_start[0:3, [3]]
+    p_end = T_end[0:3, [3]]
+    R_start = T_start[0:3, 0:3]
+    R_end = T_end[0:3, 0:3]
+
+    p_goal = p_start + s * (p_end - p_start)
+    R_goal = R_start @ Vec2Rot(Rot2Vec(R_start.T @ R_end) * s)
+
+    T_interp = np.eye(4)
+    T_interp[0:3, [3]] = p_goal
+    T_interp[0:3, 0:3] = R_goal
+    return T_interp
+
+
+class TrajectoryPlanner:
+    """궤적 생성기 — 직선, 원형 등 기본 궤적 지원"""
+
+    @staticmethod
+    def plan_linear(T_start, T_end, duration, dt):
+        """직선 경로 (cubic time scaling)"""
+        num_points = int(duration / dt)
+        s_array = _cubic_time_scaling(duration, num_points)
+        trajectory = []
+        for s in s_array:
+            T = interpolate_SE3_decoupled(T_start, T_end, s)
+            trajectory.append(T)
+        return trajectory
+
+    @staticmethod
+    def plan_constant_speed_linear(T_start, T_end, speed, dt):
+        """일정 속도 직선 경로"""
+        p_start = T_start[0:3, 3]
+        p_end = T_end[0:3, 3]
+        distance = np.linalg.norm(p_end - p_start)
+        if distance < 1e-6:
+            return [T_end.copy()]
+
+        duration = distance / speed
+        num_points = max(int(duration / dt), 1)
+
+        trajectory = []
+        for i in range(num_points):
+            s = (i + 1) / num_points
+            T = interpolate_SE3_decoupled(T_start, T_end, s)
+            trajectory.append(T)
+        return trajectory
+
+
+class StrikeTrajectoryPlanner:
+    """타격 궤적 생성기 — Approach → Strike → Follow-through"""
+
+    def __init__(self, approach_duration=3.0, dt=0.001):
+        self.approach_duration = approach_duration
+        self.dt = dt
+        self.traj_planner = TrajectoryPlanner()
+
+    def compute_strike_orientation(self, strike_direction):
+        """타격 방향에 맞는 엔드이펙터 자세 (Rotation matrix) 계산
+
+        EE의 z축(도구 축)이 strike_direction을 향하도록 설정.
+        3D 방향 지원 (수평 + 대각선 타격)
+        """
+        strike_dir = np.array(strike_direction).flatten()
+        strike_dir = strike_dir / np.linalg.norm(strike_dir)
+
+        # z축: 타격 방향 (도구 축)
+        z_axis = strike_dir.copy()
+
+        # x축: world up × z로 수평 방향 결정
+        world_up = np.array([0, 0, 1.0])
+        x_axis = np.cross(world_up, z_axis)
+        x_norm = np.linalg.norm(x_axis)
+        if x_norm < 1e-6:
+            # strike_dir이 world z축과 평행한 경우
+            x_axis = np.array([1, 0, 0])
+        else:
+            x_axis = x_axis / x_norm
+
+        # y축: z × x (오른손 좌표계 완성)
+        y_axis = np.cross(z_axis, x_axis)
+        y_axis = y_axis / np.linalg.norm(y_axis)
+
+        R = np.column_stack([x_axis, y_axis, z_axis])
+        return R
+
+    def plan_strike(self, T_current, ball_pos, strike_direction,
+                    strike_speed=0.5, approach_dist=0.08,
+                    follow_dist=0.10, strike_height=None,
+                    tool_offset=0.0):
+        """완전한 타격 궤적 생성
+
+        Args:
+            T_current: 현재 엔드이펙터 SE3 (4,4)
+            ball_pos: 공 위치 [x, y, z]
+            strike_direction: 타격 방향 벡터 [dx, dy, dz] (3D 지원)
+            strike_speed: 타격 속도 (m/s)
+            approach_dist: 접근 거리 (m)
+            follow_dist: Follow-through 거리 (m)
+            strike_height: 타격 높이 (None이면 공 높이 사용)
+            tool_offset: EE에서 도구 끝까지의 거리 (m)
+
+        Returns:
+            trajectory: SE3 리스트
+            phase_indices: 각 단계의 인덱스 경계
+        """
+        ball_pos = np.array(ball_pos).flatten()
+        strike_dir = np.array(strike_direction).flatten()
+        strike_dir = strike_dir / np.linalg.norm(strike_dir)
+
+        if strike_height is not None:
+            ball_pos[2] = strike_height
+
+        # 타격 자세
+        R_strike = self.compute_strike_orientation(strike_dir)
+
+        # tool_offset 보정: EE 위치를 도구 길이만큼 뒤로 밀어서
+        # 도구 끝(tip)이 공 표면에 도달하도록 함
+        offset = strike_dir * tool_offset
+
+        # 1. 준비 위치: 공 뒤쪽 approach_dist만큼 (+ 도구 길이)
+        ready_pos = ball_pos - strike_dir * approach_dist - offset
+        T_ready = np.eye(4)
+        T_ready[0:3, 0:3] = R_strike
+        T_ready[0:3, 3] = ready_pos
+
+        # 2. 임팩트 위치: 도구 끝이 공 표면에 닿는 지점
+        impact_pos = ball_pos - offset
+        T_impact = np.eye(4)
+        T_impact[0:3, 0:3] = R_strike
+        T_impact[0:3, 3] = impact_pos
+
+        # 3. Follow-through 위치: 임팩트 후 계속 전진
+        follow_pos = impact_pos + strike_dir * follow_dist
+        T_follow = np.eye(4)
+        T_follow[0:3, 0:3] = R_strike
+        T_follow[0:3, 3] = follow_pos
+
+        # 궤적 생성
+        # Phase 1: Approach (cubic time scaling)
+        approach_traj = self.traj_planner.plan_linear(
+            T_current, T_ready, self.approach_duration, self.dt
+        )
+
+        # Phase 2: Strike (일정 속도)
+        strike_traj = self.traj_planner.plan_constant_speed_linear(
+            T_ready, T_impact, strike_speed, self.dt
+        )
+
+        # Phase 3: Follow-through (감속)
+        follow_duration = follow_dist / (strike_speed * 0.5)  # 감속
+        follow_traj = self.traj_planner.plan_linear(
+            T_impact, T_follow, max(follow_duration, 0.1), self.dt
+        )
+
+        trajectory = approach_traj + strike_traj + follow_traj
+
+        phase_indices = {
+            'approach': (0, len(approach_traj)),
+            'strike': (len(approach_traj), len(approach_traj) + len(strike_traj)),
+            'follow': (len(approach_traj) + len(strike_traj), len(trajectory)),
+        }
+
+        return trajectory, phase_indices

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# PyBullet 임시 파일
+terrain_*.obj
+*.stl
+
+# 로그/출력
+*.txt
+!walkthrough.md
+!README.md
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# 데모 영상 (필요 시 주석 해제)
+# *.mp4
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
