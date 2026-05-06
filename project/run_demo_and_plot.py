@@ -186,11 +186,12 @@ def plot_trajectory(data, save_dir='project'):
 # ============================================================
 # GUI 데모 실행
 # ============================================================
-def run_gui_demo(demo_type, view_time=15):
+def run_gui_demo(demo_type, view_time=15, num_obstacles=5, seed=42):
     """GUI 모드 데모 실행"""
     import pybullet as p
 
-    title = 'Mini-Golf' if demo_type == 'minigolf' else 'Billiards'
+    titles = {'minigolf': 'Mini-Golf', 'billiards': 'Billiards', 'maze': 'Maze (3-Cushion)'}
+    title = titles.get(demo_type, demo_type)
     print(f"\n{'='*60}")
     print(f"  {title} GUI Demo")
     print(f"{'='*60}")
@@ -203,6 +204,7 @@ def run_gui_demo(demo_type, view_time=15):
 
     robot_id = controller.pb.my_robot.robotId
     ee_link = controller.pb.my_robot.RobotEEJointIdx[-1]
+    perception = None
 
     if demo_type == 'minigolf':
         from project.environment.minigolf_env import MiniGolfEnvironment
@@ -217,7 +219,27 @@ def run_gui_demo(demo_type, view_time=15):
         env.disable_tool_env_collision()
         tool_offset = TOOL_HEAD_LENGTH + MINIGOLF_BALL_RADIUS
         shot_planner = MinigolfShotPlanner()
-    else:
+    elif demo_type == 'maze':
+        from project.environment.maze_env import MazeEnvironment
+        from project.physics.cushion_planner import CushionShotPlanner
+        from project.perception import SimPerception
+        env = MazeEnvironment(controller.pb.ClientId)
+        CY, W = MAZE_TABLE_CENTER_Y, MAZE_TABLE_WIDTH
+        H, TH = MAZE_TABLE_SURFACE_HEIGHT, MAZE_TABLE_HEIGHT
+        ball_h = H + TH / 2 + MAZE_BALL_RADIUS + 0.001
+        env.setup(
+            cue_pos=[0.5, CY - W / 4, ball_h],
+            target_pos=[0.5, CY + W / 8, ball_h],
+            num_obstacles=num_obstacles,
+            seed=seed
+        )
+        env.disable_robot_env_collision(robot_id)
+        env.attach_compact_tool(robot_id, ee_link)
+        env.disable_tool_env_collision()
+        tool_offset = TOOL_HEAD_LENGTH + MAZE_BALL_RADIUS
+        shot_planner = CushionShotPlanner(table_bounds=env.table_bounds)
+        perception = SimPerception(env)
+    else:  # billiards
         from project.environment.billiards_env import BilliardsEnvironment
         env = BilliardsEnvironment(controller.pb.ClientId)
         CY = BILLIARD_TABLE_CENTER_Y
@@ -250,7 +272,8 @@ def run_gui_demo(demo_type, view_time=15):
         shot_planner=shot_planner,
         traj_planner=traj_planner,
         demo_type=demo_type,
-        tool_offset=tool_offset
+        tool_offset=tool_offset,
+        perception=perception
     )
 
     success = sm.run(max_attempts=3)
@@ -271,7 +294,7 @@ def run_gui_demo(demo_type, view_time=15):
 def main():
     parser = argparse.ArgumentParser(description='Indy7 Demo + Trajectory Plots')
     parser.add_argument('--demo', type=str, default='both',
-                        choices=['minigolf', 'billiards', 'both', 'none'],
+                        choices=['minigolf', 'billiards', 'maze', 'both', 'none'],
                         help='Demo to run')
     parser.add_argument('--plot-only', action='store_true',
                         help='Skip GUI demo, generate plots only')

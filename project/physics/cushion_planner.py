@@ -66,8 +66,8 @@ class CushionShotPlanner:
 
         # Phase 2: 어닐링 정밀화
         for rnd in range(n_refine):
-            n_top = max(10, int(len(results) * ANNEAL_TOP_RATIO))
             results.sort(key=lambda r: r['score'], reverse=True)
+            n_top = min(20, len(results))
             top = results[:n_top]
 
             sigma_a = np.radians(ANNEAL_SIGMA_ANGLE[min(rnd, len(ANNEAL_SIGMA_ANGLE)-1)])
@@ -75,7 +75,7 @@ class CushionShotPlanner:
 
             new_angles = []
             new_speeds = []
-            n_per = max(10, n_initial // (5 * (rnd + 1)))
+            n_per = 5  # 각 후보 주변 5개 재샘플링
             for t in top:
                 a = np.random.normal(t['angle'], sigma_a, n_per)
                 s = np.random.normal(t['speed'], sigma_s, n_per)
@@ -124,51 +124,58 @@ class CushionShotPlanner:
         return results
 
     def simulate_ball_path(self, start, direction, speed, obstacles, max_cushions,
-                           dt=0.002, max_steps=3000):
+                           dt=0.01, max_steps=500):
         """2D 공 궤적 시뮬레이션 (기하학적 반사)
 
         Returns:
             path: [(x,y), ...] 궤적 포인트
-            hit_target: bool — 목표공에 도달했는지는 외부에서 판정
+            hit_target: bool
             cushion_count: int
             collided_obstacle: bool
         """
-        pos = np.array(start, dtype=float)
-        vel = direction * speed
-        path = [pos.copy()]
+        px, py = float(start[0]), float(start[1])
+        vx, vy = float(direction[0] * speed), float(direction[1] * speed)
+        path = [(px, py)]
         cushion_count = 0
-        friction = ANNEAL_ROLLING_FRICTION
+        decay = 1 - ANNEAL_ROLLING_FRICTION * dt
 
-        b = self.bounds
-        ball_r = self.ball_r
+        xmin = self.bounds['x_min'] + self.ball_r
+        xmax = self.bounds['x_max'] - self.ball_r
+        ymin = self.bounds['y_min'] + self.ball_r
+        ymax = self.bounds['y_max'] - self.ball_r
+        e = MAZE_CUSHION_RESTITUTION
+
+        # 장애물 사전 변환
+        obs_x = [o[0] for o in obstacles]
+        obs_y = [o[1] for o in obstacles]
+        obs_r2 = [(o[2] + self.ball_r) ** 2 for o in obstacles]
 
         for _ in range(max_steps):
-            # 마찰 감속
-            spd = np.linalg.norm(vel)
-            if spd < 0.005:
+            vx *= decay
+            vy *= decay
+            if vx * vx + vy * vy < 2.5e-5:  # ~0.005 m/s
                 break
-            vel *= max(0, 1 - friction * dt)
 
-            pos = pos + vel * dt
-            path.append(pos.copy())
+            px += vx * dt
+            py += vy * dt
 
             # 쿠션 반사
             reflected = False
-            if pos[0] - ball_r <= b['x_min']:
-                pos[0] = b['x_min'] + ball_r
-                vel[0] = abs(vel[0]) * MAZE_CUSHION_RESTITUTION
+            if px <= xmin:
+                px = xmin
+                vx = abs(vx) * e
                 reflected = True
-            elif pos[0] + ball_r >= b['x_max']:
-                pos[0] = b['x_max'] - ball_r
-                vel[0] = -abs(vel[0]) * MAZE_CUSHION_RESTITUTION
+            elif px >= xmax:
+                px = xmax
+                vx = -abs(vx) * e
                 reflected = True
-            if pos[1] - ball_r <= b['y_min']:
-                pos[1] = b['y_min'] + ball_r
-                vel[1] = abs(vel[1]) * MAZE_CUSHION_RESTITUTION
+            if py <= ymin:
+                py = ymin
+                vy = abs(vy) * e
                 reflected = True
-            elif pos[1] + ball_r >= b['y_max']:
-                pos[1] = b['y_max'] - ball_r
-                vel[1] = -abs(vel[1]) * MAZE_CUSHION_RESTITUTION
+            elif py >= ymax:
+                py = ymax
+                vy = -abs(vy) * e
                 reflected = True
 
             if reflected:
@@ -176,25 +183,27 @@ class CushionShotPlanner:
                 if cushion_count > max_cushions + 1:
                     break
 
-            # 장애물 충돌 판정
-            for ox, oy, o_r in obstacles:
-                d = np.linalg.norm(pos - np.array([ox, oy]))
-                if d < ball_r + o_r:
+            # 장애물 충돌 판정 (제곱 비교로 sqrt 제거)
+            for i in range(len(obs_x)):
+                dx = px - obs_x[i]
+                dy = py - obs_y[i]
+                if dx * dx + dy * dy < obs_r2[i]:
+                    path.append((px, py))
                     return path, False, cushion_count, True
+
+            path.append((px, py))
 
         return path, False, cushion_count, False
 
     def _score(self, path, target_2d, hit, cushions, collided):
         """스코어링 함수"""
         if collided:
-            return -1e6  # 장애물 충돌 → 즉시 기각
+            return -1e6
 
-        # 경로 중 목표공에 가장 가까운 거리
-        min_dist = float('inf')
-        for pt in path:
-            d = np.linalg.norm(np.array(pt) - target_2d)
-            if d < min_dist:
-                min_dist = d
+        # 경로 중 목표공에 가장 가까운 거리 (벡터화)
+        pts = np.array(path)
+        dists = np.sqrt((pts[:, 0] - target_2d[0])**2 + (pts[:, 1] - target_2d[1])**2)
+        min_dist = dists.min()
 
         # 명중 판정 (2r 이내)
         hit_threshold = self.ball_r * 2 + 0.005
