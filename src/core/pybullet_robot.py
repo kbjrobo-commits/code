@@ -135,7 +135,21 @@ class PybulletRobot:
         # Import robot in PyBullet
         flags = p.URDF_USE_INERTIA_FROM_FILE + p.URDF_USE_SELF_COLLISION + p.URDF_USE_SELF_COLLISION_EXCLUDE_PARENT
         urdf_dir = self.__urdfpath + "/{0}/{1}".format(self.robot_type, self.robot_name)
-        urdf_path = urdf_dir + "/model.urdf"
+        urdf_dir = os.path.abspath(urdf_dir)
+
+        # PyBullet은 경로에 한글/공백이 있으면 URDF 로드 실패 → 안전한 경로로 복사
+        try:
+            urdf_dir.encode('ascii')
+            safe_dir = urdf_dir
+        except UnicodeEncodeError:
+            import shutil
+            safe_dir = os.path.join("C:\\tmp_urdf", self.robot_type, self.robot_name)
+            if os.path.exists(safe_dir):
+                shutil.rmtree(safe_dir)
+            shutil.copytree(urdf_dir, safe_dir)
+            print(f"[PybulletRobot] URDF copied to ASCII-safe path: {safe_dir}")
+
+        urdf_path = safe_dir + "/model.urdf"
 
         self.robotId = p.loadURDF(urdf_path, basePosition=self._base_pos, baseOrientation=self._base_quat,
                                   flags=flags, physicsClientId=self.ClientId)
@@ -163,7 +177,7 @@ class PybulletRobot:
         self._T_gb = TransInv(T_wg) @ T_wb  # pose of robot's base frame in robot's ground frame
 
         # Get pinocchio model to compute robot's dynamics & kinematics
-        self.pinModel = PinocchioModel(urdf_dir, self._base_SE3 @ self._T_gb)
+        self.pinModel = PinocchioModel(safe_dir, self._base_SE3 @ self._T_gb)
 
         # set robot's number of bodies and number of joints
         self._numBodies = 1 + p.getNumJoints(self.robotId, self.ClientId)
