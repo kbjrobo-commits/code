@@ -111,7 +111,12 @@ class RobotController:
             self.pb.disconnect()
         self._connected = False
 
-    def move_home(self):
+    def move_home(self, safe_retract=True):
+        """홈 복귀 — safe_retract=True면 먼저 팔을 들어올린 후 복귀"""
+        if safe_retract:
+            # 현재 자세에서 Joint 2,3만 들어올려 테이블 위 상공 확보
+            RETRACT_Q_DEG = [0, -15, -45, 0, -90, 0]
+            self.movej(RETRACT_Q_DEG, wait=True)
         self.movej(HOME_Q_DEG, wait=True)
         print("[RobotController] Moved to home position")
 

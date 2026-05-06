@@ -286,9 +286,14 @@ class MazeEnvironment:
         return head_id
 
     def disable_robot_env_collision(self, robot_id):
-        """로봇 링크와 테이블/쿠션/장애물 간 충돌 비활성화"""
+        """로봇 링크와 테이블/쿠션/장애물/공 간 충돌 비활성화
+
+        로봇 몸체가 접근 시 공이나 장애물을 밀어버리는 것을 방지.
+        도구-큐볼 충돌만 별도로 유지됨.
+        """
         num_joints = p.getNumJoints(robot_id, physicsClientId=self.client)
-        env_bodies = [self.table_id] + self.cushion_ids + self.obstacle_ids
+        env_bodies = ([self.table_id] + self.cushion_ids + self.obstacle_ids
+                      + [self.cue_ball_id, self.target_ball_id])
         for env_body in env_bodies:
             if env_body is None:
                 continue
@@ -297,12 +302,18 @@ class MazeEnvironment:
                                          enableCollision=0, physicsClientId=self.client)
 
     def disable_tool_env_collision(self):
-        """도구-테이블/쿠션/장애물 충돌 비활성화 (테이블/쿠션만, 공은 유지)"""
+        """도구 충돌 설정: 큐볼만 충돌 유지, 나머지 전부 비활성화"""
         if self.tool_id is None:
             return
-        env_bodies = [self.table_id] + self.cushion_ids + self.obstacle_ids
-        for env_body in env_bodies:
+        # 테이블/쿠션/장애물/목표공과 충돌 비활성화
+        no_collide = ([self.table_id] + self.cushion_ids + self.obstacle_ids
+                      + [self.target_ball_id])
+        for env_body in no_collide:
             if env_body is None:
                 continue
             p.setCollisionFilterPair(self.tool_id, env_body, -1, -1,
                                      enableCollision=0, physicsClientId=self.client)
+        # 도구-큐볼 충돌은 명시적으로 활성화 (타격용)
+        if self.cue_ball_id is not None:
+            p.setCollisionFilterPair(self.tool_id, self.cue_ball_id, -1, -1,
+                                     enableCollision=1, physicsClientId=self.client)
