@@ -109,3 +109,36 @@ COLOR_GOLF_GREEN = [0.2, 0.6, 0.2, 1]
 COLOR_HOLE_BLACK = [0.05, 0.05, 0.05, 1]
 COLOR_STEEL = [0.7, 0.7, 0.75, 1]
 COLOR_WOOD = [0.55, 0.35, 0.15, 1]
+COLOR_OBSTACLE = [0.6, 0.2, 0.2, 1]
+
+# ============================================================
+# 미로 환경 파라미터
+# ============================================================
+MAZE_TABLE_LENGTH = 0.60           # 테이블 길이 X (m)
+MAZE_TABLE_WIDTH = 0.40            # 테이블 폭 Y (m)
+MAZE_TABLE_HEIGHT = 0.02           # 테이블 두께 (m)
+MAZE_TABLE_SURFACE_HEIGHT = 0.3    # 테이블 바닥면 높이 (m)
+MAZE_TABLE_CENTER_Y = 0.45         # 테이블 중심 Y
+MAZE_GRID_SPACING = 0.05           # 자석 그리드 간격 (m)
+MAZE_OBSTACLE_RADIUS = 0.015       # 장애물 원기둥 반지름 (m)
+MAZE_OBSTACLE_HEIGHT = 0.05        # 장애물 높이 (m)
+MAZE_CUSHION_HEIGHT = 0.05         # 쿠션 높이 (m)
+MAZE_CUSHION_RESTITUTION = 0.8     # 쿠션 반발계수
+MAZE_BALL_RADIUS = 0.02625         # 큐볼 반지름 (m)
+MAZE_BALL_MASS = 0.17              # 큐볼 질량 (kg)
+MAZE_BALL_RESTITUTION = 0.85       # 큐볼 반발계수
+MAZE_BALL_FRICTION = 0.3
+MAZE_BALL_ROLLING_FRICTION = 0.02
+MAZE_STRIKE_ANGLE_DEG = 15         # 타격 각도 (대각선 내려치기)
+
+# ============================================================
+# 어닐링 탐색 파라미터
+# ============================================================
+ANNEAL_N_INITIAL = 2000            # 초기 광역 샘플 수
+ANNEAL_N_REFINE_ROUNDS = 3         # 정밀화 라운드 수
+ANNEAL_TOP_RATIO = 0.10            # 상위 선택 비율
+ANNEAL_SIGMA_ANGLE = [30, 5, 1]    # 각도 분산 축소 (degrees)
+ANNEAL_SIGMA_SPEED = [0.1, 0.03, 0.01]  # 속도 분산 축소 (m/s)
+ANNEAL_SPEED_RANGE = (0.3, 1.0)    # 타격 속도 범위 (m/s)
+ANNEAL_MAX_CUSHIONS = 3            # 최대 쿠션 반사 횟수
+ANNEAL_ROLLING_FRICTION = 0.015    # 공 구름 마찰 (2D 시뮬용)

@@ -10,6 +10,8 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+from project.config import *
+
 
 class AutonomousStateMachine:
     """자율 타격 루프 상태 머신
@@ -22,15 +24,16 @@ class AutonomousStateMachine:
     """
 
     def __init__(self, controller, environment, shot_planner, traj_planner,
-                 demo_type='minigolf', tool_offset=0.0):
+                 demo_type='minigolf', tool_offset=0.0, perception=None):
         """
         Args:
             controller: RobotController 인스턴스
-            environment: MiniGolfEnvironment 또는 BilliardsEnvironment
+            environment: MiniGolfEnvironment / BilliardsEnvironment / MazeEnvironment
             shot_planner: ShotPlanner 인스턴스
             traj_planner: StrikeTrajectoryPlanner 인스턴스
-            demo_type: 'minigolf' or 'billiards'
+            demo_type: 'minigolf', 'billiards', or 'maze'
             tool_offset: EE에서 도구 끝까지 거리 (m)
+            perception: PerceptionInterface (None이면 직접 env 접근)
         """
         self.controller = controller
         self.env = environment
@@ -38,6 +41,7 @@ class AutonomousStateMachine:
         self.traj = traj_planner
         self.demo_type = demo_type
         self.tool_offset = tool_offset
+        self.perception = perception
         self.state = 'INIT'
         self.attempt = 0
         self.history = []
@@ -121,12 +125,25 @@ class AutonomousStateMachine:
         return successes > 0
 
     def _scan(self):
-        """SCAN: 공/홀/포켓 위치 인식"""
+        """SCAN: 공/홀/포켓/장애물 위치 인식"""
+        if self.demo_type == 'maze' and self.perception is not None:
+            return self.perception.scan_environment()
+
         if self.demo_type == 'minigolf':
             ball_pos = self.env.get_ball_position()
             return {
                 'ball_pos': ball_pos,
                 'hole_pos': self.env.hole_pos
+            }
+        elif self.demo_type == 'maze':
+            cue_pos = self.env.get_cue_ball_position()
+            target_pos = self.env.get_target_ball_position()
+            obstacles = self.env.get_obstacle_positions()
+            return {
+                'cue_pos': cue_pos,
+                'target_pos': target_pos,
+                'obstacles': obstacles,
+                'table_bounds': self.env.table_bounds
             }
         else:  # billiards
             cue_pos = self.env.get_cue_ball_position()
@@ -156,6 +173,21 @@ class AutonomousStateMachine:
                 'strike_dir': strike_dir,
                 'strike_speed': speed,
                 'ball_pos': scan_data['ball_pos']
+            }
+        elif self.demo_type == 'maze':
+            print(f"  Running annealing cushion search...")
+            result = self.planner.plan_shot(
+                scan_data['cue_pos'],
+                scan_data['target_pos'],
+                scan_data['obstacles']
+            )
+            print(f"  Best: angle={result['angle_deg']:.1f}°, "
+                  f"cushions={result['cushion_count']}, score={result['score']:.0f}")
+            return {
+                'strike_dir': result['strike_dir'],
+                'strike_speed': result['strike_speed'],
+                'ball_pos': scan_data['cue_pos'],
+                'ball_path': result.get('ball_path'),
             }
         else:  # billiards
             result = self.planner.find_best_pocket_shot(
@@ -197,10 +229,10 @@ class AutonomousStateMachine:
         # 타격 높이: 공 중심 높이
         strike_height = ball_pos[2]
 
-        # 빌리아드: 위에서 대각선으로 내려치기
-        if self.demo_type == 'billiards':
-            from project.config import BILLIARD_STRIKE_ANGLE_DEG
-            angle_rad = np.radians(BILLIARD_STRIKE_ANGLE_DEG)
+        # 빌리아드/미로: 위에서 대각선으로 내려치기
+        if self.demo_type in ('billiards', 'maze'):
+            angle_deg = BILLIARD_STRIKE_ANGLE_DEG if self.demo_type == 'billiards' else MAZE_STRIKE_ANGLE_DEG
+            angle_rad = np.radians(angle_deg)
             horiz = np.array(strike_dir_2d[:2]).flatten()
             horiz_norm = np.linalg.norm(horiz)
             if horiz_norm > 1e-6:
@@ -243,6 +275,12 @@ class AutonomousStateMachine:
 
     def _observe(self):
         """OBSERVE: 결과 관찰"""
+        if self.demo_type == 'maze' and self.perception is not None:
+            result = self.perception.observe_result()
+            hit = result['target_hit']
+            print(f"  Target hit: {hit}, distance: {result['distance']:.4f}m")
+            return hit
+
         # 임팩트 직후 공 속도 측정 (계획 vs 실제 비교용)
         if self.demo_type == 'minigolf':
             ball_vel = self.env.get_ball_velocity()
@@ -254,9 +292,16 @@ class AutonomousStateMachine:
         if self.demo_type == 'minigolf':
             self.env.wait_ball_stop(timeout=8.0)
             return self.env.is_hole_in()
+        elif self.demo_type == 'maze':
+            self.env.wait_balls_stop(timeout=8.0)
+            hit = self.env.is_target_hit()
+            cue = self.env.get_cue_ball_position()
+            tgt = self.env.get_target_ball_position()
+            dist = np.linalg.norm(cue[:2] - tgt[:2])
+            print(f"  Target hit: {hit}, distance: {dist:.4f}m")
+            return hit
         else:  # billiards
             self.env.wait_balls_stop(timeout=8.0)
-            # 공이 테이블 밖으로 이탈했으면 리셋
             if self.env.is_ball_out_of_table(self.env.cue_ball_id):
                 print(f"  [WARNING] Cue ball fell off table! Resetting to start position.")
                 self.env.reset_balls(cue_pos=self.env.cue_start_pos)
@@ -269,6 +314,10 @@ class AutonomousStateMachine:
         """결과 거리 측정"""
         if self.demo_type == 'minigolf':
             return self.env.get_distance_to_hole()
+        elif self.demo_type == 'maze':
+            cue = self.env.get_cue_ball_position()
+            tgt = self.env.get_target_ball_position()
+            return np.linalg.norm(cue[:2] - tgt[:2])
         else:
             target_pos = self.env.get_target_ball_position()
             nearest, dist = self.env.get_nearest_pocket(target_pos)

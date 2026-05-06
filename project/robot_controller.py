@@ -190,7 +190,7 @@ class RobotController:
             self._execute_sim(trajectory_SE3, dt, visualize, phase_indices,
                               strike_speed=strike_speed)
         elif self.mode == 'real':
-            self._execute_real(trajectory_SE3, dt)
+            self._execute_real(trajectory_SE3, dt, phase_indices=phase_indices)
 
     def _execute_headless(self, trajectory, dt):
         import pybullet as p
@@ -310,7 +310,48 @@ class RobotController:
 
         self._q_current = q_i.copy()
 
-    def _execute_real(self, trajectory, dt):
+    def _execute_real(self, trajectory, dt, phase_indices=None, **kwargs):
+        """Phase-aware 실제 로봇 실행
+
+        기획서 3.3절: 초고속 시계열 궤적 스트리밍
+        - Approach: movel (내장 감속 OK, 안전)
+        - Strike+Follow: 1kHz teleop 스트리밍 (vel_ratio=1.0, 감속 무력화)
+        """
+        if phase_indices is None:
+            # Phase 정보 없으면 전체를 균일 teleop 재생 (기존 호환)
+            self._execute_real_uniform(trajectory, dt)
+            return
+
+        approach_end = phase_indices['approach'][1]
+
+        # Phase 1: Approach — movel로 안전하게 접근
+        T_ready = trajectory[approach_end - 1]
+        p_ready = self._SE3_to_task_pose(T_ready)
+        print(f"    [Real] Approach via movel...")
+        self.indy.movel(p_ready)
+        self._wait_indy()
+        print(f"    [Real] Approach complete")
+
+        # Phase 2: Strike + Follow — 1kHz teleop 스트리밍
+        strike_traj = trajectory[approach_end:]
+        print(f"    [Real] Strike streaming: {len(strike_traj)} pts @ 1kHz...")
+        self.indy.start_teleop(0)
+        time.sleep(0.3)
+
+        idx = 0
+        while idx < len(strike_traj):
+            tic = time.time()
+            p_des = self._SE3_to_task_pose(strike_traj[idx])
+            self.indy.movetelel_abs(p_des, vel_ratio=1.0, acc_ratio=1.0)
+            toc = time.time()
+            idx += max(1, int((toc - tic) / dt))
+
+        self._wait_indy()
+        self.indy.stop_teleop()
+        print(f"    [Real] Strike complete")
+
+    def _execute_real_uniform(self, trajectory, dt):
+        """기존 호환용: 전체 궤적 균일 teleop 재생"""
         self.indy.start_teleop(0)
         time.sleep(1)
         idx = 0
