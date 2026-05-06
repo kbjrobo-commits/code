@@ -8,7 +8,6 @@ build/
 
 # PyBullet 임시 파일
 terrain_*.obj
-*.stl
 
 # 로그/출력
 *.txt
