@@ -37,8 +37,7 @@ class PybulletRobot:
 
         # Simulator configuration
         self.__filepath = os.path.dirname(os.path.abspath(__file__))
-        # self.__urdfpath = self.__filepath + "/../assets/urdf"
-        self.__urdfpath = "src/assets/urdf"
+        self.__urdfpath = self.__filepath + "/../assets/urdf"
 
         self.ClientId = ClientId
         self._robot_info = robot_info
