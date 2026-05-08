@@ -69,6 +69,7 @@ class AutonomousStateMachine:
             # === SCAN ===
             print(f"\n[STATE: SCAN] Detecting objects...")
             scan_data = self._scan()
+            self.last_scan = scan_data  # 궤적 장애물 체크용
             print(f"  Scan result: {scan_data}")
 
             # === THINK ===
@@ -175,19 +176,26 @@ class AutonomousStateMachine:
                 'ball_pos': scan_data['ball_pos']
             }
         elif self.demo_type == 'maze':
-            print(f"  Running annealing cushion search...")
-            result = self.planner.plan_shot(
+            print(f"  Running 3-ball cushion search...")
+            candidates = self.planner.plan_shot(
                 scan_data['cue_pos'],
                 scan_data['target_pos'],
-                scan_data['obstacles']
+                scan_data['obstacles'],
+                ball2_pos=scan_data.get('ball2_pos')
             )
-            print(f"  Best: angle={result['angle_deg']:.1f}°, "
-                  f"cushions={result['cushion_count']}, score={result['score']:.0f}")
+            best = candidates[0]
+            print(f"  Found {len(candidates)} diverse candidates")
+            print(f"  Top: angle={best['angle_deg']:.1f}deg, "
+                  f"cushions={best['cushion_count']}, "
+                  f"hit_t1={best.get('hit_t1',False)}, "
+                  f"hit_t2={best.get('hit_t2',False)}, "
+                  f"score={best['score']:.0f}")
             return {
-                'strike_dir': result['strike_dir'],
-                'strike_speed': result['strike_speed'],
+                'strike_dir': best['strike_dir'],
+                'strike_speed': best['strike_speed'],
                 'ball_pos': scan_data['cue_pos'],
-                'ball_path': result.get('ball_path'),
+                'ball_path': best.get('ball_path'),
+                'candidates': candidates,  # 전체 후보 리스트
             }
         else:  # billiards
             result = self.planner.find_best_pocket_shot(
@@ -204,21 +212,23 @@ class AutonomousStateMachine:
             }
 
     def _strike(self, scan_data, plan):
-        """ALIGN & STRIKE: 궤적 생성 및 실행"""
+        """ALIGN & STRIKE: 후보 순회 → IK+장애물 검증 → 첫 번째 유효 후보만 실행
+
+        핵심: 계획기가 여러 후보를 리턴하면, 각 후보에 대해
+        모든 φ를 시도하여 IK+장애물 전부 통과하는 조합을 찾음.
+        전부 실패하면 skip.
+        """
         T_current = self.controller.get_current_T()
         ball_pos = plan['ball_pos']
-        strike_dir_2d = plan['strike_dir']  # 수평 타격 방향
-        strike_speed = plan['strike_speed']
 
-        # 도달 가능성 확인 — 공이 로봇 base(원점)에서 너무 멀면 리셋
+        # 도달 가능성 확인
         ball_dist_from_base = np.linalg.norm(ball_pos[:2])
-        if ball_dist_from_base > 0.70:
-            print(f"  [WARNING] Ball too far from robot ({ball_dist_from_base:.3f}m > 0.70m).")
-            if self.demo_type == 'billiards' and hasattr(self.env, 'reset_balls'):
+        if ball_dist_from_base > 0.80:
+            print(f"  [WARNING] Ball too far from robot ({ball_dist_from_base:.3f}m > 0.80m).")
+            if hasattr(self.env, 'reset_balls'):
                 print(f"  Resetting cue ball to start position...")
                 self.env.reset_balls(cue_pos=self.env.cue_start_pos)
-                import time as t
-                t.sleep(0.5)
+                time.sleep(0.5)
                 ball_pos = self.env.get_cue_ball_position()
                 plan['ball_pos'] = ball_pos
             else:
@@ -226,48 +236,137 @@ class AutonomousStateMachine:
                 self._strike_skipped = True
                 return
 
-        # 타격 높이: 공 중심 높이
         strike_height = ball_pos[2]
 
-        # 빌리아드/미로: 위에서 대각선으로 내려치기
-        if self.demo_type in ('billiards', 'maze'):
-            angle_deg = BILLIARD_STRIKE_ANGLE_DEG if self.demo_type == 'billiards' else MAZE_STRIKE_ANGLE_DEG
-            angle_rad = np.radians(angle_deg)
-            horiz = np.array(strike_dir_2d[:2]).flatten()
-            horiz_norm = np.linalg.norm(horiz)
-            if horiz_norm > 1e-6:
-                horiz = horiz / horiz_norm
-            strike_dir_3d = np.array([
-                horiz[0] * np.cos(angle_rad),
-                horiz[1] * np.cos(angle_rad),
-                -np.sin(angle_rad)
-            ])
-            strike_dir_3d = strike_dir_3d / np.linalg.norm(strike_dir_3d)
-        else:
-            # 미니골프: 수평 타격
-            strike_dir_3d = np.array(strike_dir_2d).flatten()
+        # 장애물 좌표
+        obs_list = []
+        if hasattr(self, 'last_scan') and self.last_scan is not None:
+            obs_list = self.last_scan.get('obstacles', [])
 
-        # 궤적 생성 (follow_dist=0.05: 공 너머 5cm까지 가속 궤적 생성)
-        trajectory, phases = self.traj.plan_strike(
-            T_current=T_current,
-            ball_pos=ball_pos,
-            strike_direction=strike_dir_3d,
-            strike_speed=strike_speed,
-            approach_dist=0.06,
-            follow_dist=0.05,      # 공 너머를 목표로 하여 감속 없이 타격
-            strike_height=strike_height,
-            tool_offset=self.tool_offset
-        )
+        # 후보 리스트 (maze는 다중 후보, 그 외는 단일)
+        candidates = plan.get('candidates', [plan])
+
+        q_current = self.controller.get_current_q()
+        phi_candidates = np.linspace(0, 2 * np.pi, 12, endpoint=False)
+
+        # === 후보 순회: 각 후보 × 각 φ 조합 시도 ===
+        found = False
+        chosen_candidate = None
+
+        for ci, candidate in enumerate(candidates):
+            strike_dir_2d = candidate['strike_dir']
+            strike_speed = candidate['strike_speed']
+
+            # 2D → 3D 방향 변환
+            if self.demo_type in ('billiards', 'maze'):
+                angle_deg = BILLIARD_STRIKE_ANGLE_DEG if self.demo_type == 'billiards' else MAZE_STRIKE_ANGLE_DEG
+                angle_rad = np.radians(angle_deg)
+                horiz = np.array(strike_dir_2d[:2]).flatten()
+                horiz_norm = np.linalg.norm(horiz)
+                if horiz_norm > 1e-6:
+                    horiz = horiz / horiz_norm
+                strike_dir_3d = np.array([
+                    horiz[0] * np.cos(angle_rad),
+                    horiz[1] * np.cos(angle_rad),
+                    -np.sin(angle_rad)
+                ])
+                strike_dir_3d = strike_dir_3d / np.linalg.norm(strike_dir_3d)
+            else:
+                strike_dir_3d = np.array(strike_dir_2d).flatten()
+
+            best_result = None
+            best_phi = 0.0
+            best_min_w = -1
+            best_trajectory = None
+            best_phases = None
+
+            for phi in phi_candidates:
+                trajectory, phases = self.traj.plan_strike(
+                    T_current=T_current,
+                    ball_pos=ball_pos,
+                    strike_direction=strike_dir_3d,
+                    strike_speed=strike_speed,
+                    approach_dist=STRIKE_APPROACH_DIST,
+                    follow_dist=STRIKE_FOLLOW_DIST,
+                    strike_height=strike_height,
+                    tool_offset=self.tool_offset,
+                    tool_rotation=phi
+                )
+
+                # 장애물 근접 체크
+                obstacle_clear = True
+                if obs_list:
+                    clearance = 0.07  # 장애물 r(1.5cm) + EE(3cm) + 여유(2.5cm)
+                    check_start = max(phases['approach'][1] - 200, 0)
+                    check_end = phases['strike'][1]
+                    for k in range(check_start, min(check_end, len(trajectory)), 10):
+                        ee_pos = trajectory[k][0:3, 3]
+                        for ox, oy, orr in obs_list:
+                            dx = ee_pos[0] - ox
+                            dy = ee_pos[1] - oy
+                            dist_xy = np.sqrt(dx*dx + dy*dy)
+                            if dist_xy < orr + clearance:
+                                obstacle_clear = False
+                                break
+                        if not obstacle_clear:
+                            break
+
+                if not obstacle_clear:
+                    continue
+
+                # IK 사전검증
+                result = self.controller.ik.solve_trajectory_validated(
+                    q_current, trajectory
+                )
+
+                if result['valid']:
+                    if result['min_manipulability'] > best_min_w:
+                        best_min_w = result['min_manipulability']
+                        best_result = result
+                        best_phi = phi
+                        best_trajectory = trajectory
+                        best_phases = phases
+
+            # 이 후보에서 유효한 궤적을 찾았으면 사용
+            if best_result is not None and best_result['valid']:
+                print(f"  [OK] Candidate #{ci+1}/{len(candidates)} valid "
+                      f"(angle={candidate['angle_deg']:.1f}deg, phi={np.degrees(best_phi):.0f}deg, "
+                      f"w={best_min_w:.4f}, "
+                      f"hit_t1={candidate.get('hit_t1',False)}, "
+                      f"hit_t2={candidate.get('hit_t2',False)}, "
+                      f"score={candidate['score']:.0f})")
+                found = True
+                chosen_candidate = candidate
+                trajectory = best_trajectory
+                phases = best_phases
+                break
+            else:
+                reason = "IK invalid" if best_result else "obstacle collision"
+                print(f"  [SKIP] Candidate #{ci+1} (angle={candidate['angle_deg']:.1f}deg): {reason}")
+
+        if not found:
+            print(f"  [FAIL] All {len(candidates)} candidates failed IK+obstacle check. Skipping strike.")
+            self._strike_skipped = True
+            return
+
+        # 시각화 (선택된 후보의 ball_path)
+        ball_path = chosen_candidate.get('ball_path')
+        if ball_path is not None and len(ball_path) > 1 and hasattr(self.env, 'client'):
+            import pybullet as _p
+            surface_z = ball_pos[2]
+            for i in range(len(ball_path) - 1):
+                p1 = [ball_path[i][0], ball_path[i][1], surface_z]
+                p2 = [ball_path[i+1][0], ball_path[i+1][1], surface_z]
+                _p.addUserDebugLine(p1, p2, [0, 0.5, 1], lineWidth=2,
+                                   lifeTime=15, physicsClientId=self.env.client)
+            print(f"    [VIS] Planned ball path drawn ({len(ball_path)} pts)")
 
         print(f"  Trajectory: {len(trajectory)} points")
-        print(f"    Strike dir 3D: [{strike_dir_3d[0]:.3f}, {strike_dir_3d[1]:.3f}, {strike_dir_3d[2]:.3f}]")
         print(f"    EE strike speed: {strike_speed:.3f} m/s")
-        print(f"    Approach: {phases['approach'][1] - phases['approach'][0]} pts")
-        print(f"    Strike:   {phases['strike'][1] - phases['strike'][0]} pts")
 
         self._strike_skipped = False
 
-        # 실행 — 타격 후 즉시 후퇴
+        # 실행
         self.controller.execute_trajectory(
             trajectory, dt=0.002, phase_indices=phases,
             strike_speed=strike_speed
@@ -275,11 +374,6 @@ class AutonomousStateMachine:
 
     def _observe(self):
         """OBSERVE: 결과 관찰"""
-        if self.demo_type == 'maze' and self.perception is not None:
-            result = self.perception.observe_result()
-            hit = result['target_hit']
-            print(f"  Target hit: {hit}, distance: {result['distance']:.4f}m")
-            return hit
 
         # 임팩트 직후 공 속도 측정 (계획 vs 실제 비교용)
         if self.demo_type == 'minigolf':
@@ -294,11 +388,33 @@ class AutonomousStateMachine:
             return self.env.is_hole_in()
         elif self.demo_type == 'maze':
             self.env.wait_balls_stop(timeout=8.0)
+            # 공이 테이블 밖으로 나갔으면 리셋
+            if hasattr(self.env, 'is_ball_out_of_table'):
+                cue_out = self.env.is_ball_out_of_table(self.env.cue_ball_id)
+                tgt_out = self.env.is_ball_out_of_table(self.env.target_ball_id)
+                b2_out = self.env.is_ball_out_of_table(self.env.ball2_id) if hasattr(self.env, 'ball2_id') else False
+                if cue_out or tgt_out or b2_out:
+                    print(f"  [WARNING] Ball off table! cue={cue_out}, tgt1={tgt_out}, tgt2={b2_out}")
+                    reset_cue = self.env.cue_start_pos if cue_out else None
+                    reset_tgt = self.env.target_start_pos if tgt_out else None
+                    self.env.reset_balls(cue_pos=reset_cue, target_pos=reset_tgt)
+                    # ball2 리셋 (pybullet 직접 호출)
+                    if b2_out and hasattr(self.env, 'ball2_start_pos'):
+                        import pybullet
+                        pybullet.resetBasePositionAndOrientation(
+                            self.env.ball2_id, list(self.env.ball2_start_pos),
+                            [0,0,0,1], physicsClientId=self.env.client)
+                        pybullet.resetBaseVelocity(self.env.ball2_id, [0,0,0], [0,0,0],
+                                                   physicsClientId=self.env.client)
+                    import time as _t; _t.sleep(0.5)
+                    return False
             hit = self.env.is_target_hit()
             cue = self.env.get_cue_ball_position()
-            tgt = self.env.get_target_ball_position()
-            dist = np.linalg.norm(cue[:2] - tgt[:2])
-            print(f"  Target hit: {hit}, distance: {dist:.4f}m")
+            tgt1 = self.env.get_target_ball_position()
+            tgt2 = self.env.get_ball2_position() if hasattr(self.env, 'get_ball2_position') else cue
+            d1 = np.linalg.norm(cue[:2] - tgt1[:2])
+            d2 = np.linalg.norm(cue[:2] - tgt2[:2])
+            print(f"  3-cushion: both_hit={hit}, d(cue-tgt1)={d1:.4f}m, d(cue-tgt2)={d2:.4f}m")
             return hit
         else:  # billiards
             self.env.wait_balls_stop(timeout=8.0)

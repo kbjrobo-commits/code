@@ -186,7 +186,7 @@ def plot_trajectory(data, save_dir='project'):
 # ============================================================
 # GUI 데모 실행
 # ============================================================
-def run_gui_demo(demo_type, view_time=15, num_obstacles=5, seed=42):
+def run_gui_demo(demo_type, view_time=15, num_obstacles=5, seed=None):
     """GUI 모드 데모 실행"""
     import pybullet as p
 

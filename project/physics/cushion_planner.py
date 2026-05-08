@@ -1,8 +1,18 @@
 """
-3쿠션 + 장애물 회피 타격 탐색기
+3쿠션 + 장애물 반사 타격 탐색기
 ================================
-어닐링 샘플링 기반 다중 반사 궤적 최적화
-기획서 3.1절: DIAL-MPC 탐색
+3공 동시 2D 충돌 시뮬레이션 + 어닐링 샘플링 최적화
+
+물리 모델:
+- 3공(큐, 황, 적) 동시 2D 위치/속도 추적
+- 공-쿠션: 기하 반사 (반발계수 적용)
+- 공-공: 2D 탄성 충돌 (운동량+에너지 보존)
+- 공-장애물: 원형 장애물 반사 (법선 방향 반사)
+- 마찰 감쇠: 매 스텝 속도 감쇠
+
+쓰리쿠션 판정:
+- 큐볼이 두 목표공 모두 접촉
+- 쿠션 반사 3회 이상 (접촉 사이 or 접촉 전)
 """
 import numpy as np
 import sys
@@ -17,44 +27,47 @@ def ball_speed_to_ee_speed(v_ball, m_tool=TOOL_HEAD_MASS,
                            m_ball=MAZE_BALL_MASS,
                            e_tool=TOOL_HEAD_RESTITUTION,
                            e_ball=MAZE_BALL_RESTITUTION):
-    """운동량 보존으로 필요한 EE 속도 역산"""
+    """운동량 보존으로 필요한 EE 속도 역산 (대각선 타격 보정 포함)"""
     e = np.sqrt(e_tool * e_ball)
     ratio = (1 + e) * m_tool / (m_tool + m_ball)
     if ratio < 1e-6:
         return v_ball
-    return v_ball / ratio
+    ee_speed = v_ball / ratio
+    # 대각선 타격 보정: EE의 수평 성분만 공에 전달
+    cos_angle = np.cos(np.radians(MAZE_STRIKE_ANGLE_DEG))
+    if cos_angle > 1e-6:
+        ee_speed = ee_speed / cos_angle
+    return ee_speed
 
 
 class CushionShotPlanner:
-    """어닐링 기반 다중 쿠션 반사 + 장애물 회피 최적 타격 탐색"""
+    """3공 동시 시뮬레이션 기반 쓰리쿠션 타격 탐색"""
 
     def __init__(self, table_bounds, ball_radius=MAZE_BALL_RADIUS):
-        """
-        Args:
-            table_bounds: dict with x_min, x_max, y_min, y_max
-            ball_radius: 공 반지름
-        """
         self.bounds = table_bounds
         self.ball_r = ball_radius
 
     def plan_shot(self, cue_pos, target_pos, obstacles,
+                  ball2_pos=None,
                   n_initial=None, n_refine=None, max_cushions=None):
         """최적 타격 방향/속도 탐색
 
         Args:
             cue_pos: 큐볼 3D 위치
-            target_pos: 목표공 3D 위치
+            target_pos: 목표공1(황) 3D 위치
             obstacles: [(x, y, radius), ...] 장애물 리스트
+            ball2_pos: 목표공2(적) 3D 위치 (None이면 무시)
 
         Returns:
-            dict: strike_dir, strike_speed, ball_path, cushion_count, score
+            dict: strike_dir, strike_speed, ball_path, cushion_count, score, ...
         """
         if n_initial is None: n_initial = ANNEAL_N_INITIAL
         if n_refine is None: n_refine = ANNEAL_N_REFINE_ROUNDS
         if max_cushions is None: max_cushions = ANNEAL_MAX_CUSHIONS
 
         cue_2d = np.array(cue_pos[:2])
-        tgt_2d = np.array(target_pos[:2])
+        tgt1_2d = np.array(target_pos[:2])
+        tgt2_2d = np.array(ball2_pos[:2]) if ball2_pos is not None else None
         obs_2d = [(o[0], o[1], o[2]) for o in obstacles]
 
         speed_lo, speed_hi = ANNEAL_SPEED_RANGE
@@ -62,12 +75,13 @@ class CushionShotPlanner:
         # Phase 1: 광역 탐색
         angles = np.random.uniform(0, 2 * np.pi, n_initial)
         speeds = np.random.uniform(speed_lo, speed_hi, n_initial)
-        results = self._evaluate_batch(cue_2d, tgt_2d, obs_2d, angles, speeds, max_cushions)
+        results = self._evaluate_batch(
+            cue_2d, tgt1_2d, tgt2_2d, obs_2d, angles, speeds, max_cushions)
 
         # Phase 2: 어닐링 정밀화
         for rnd in range(n_refine):
             results.sort(key=lambda r: r['score'], reverse=True)
-            n_top = min(20, len(results))
+            n_top = max(int(n_initial * ANNEAL_TOP_RATIO), 5)
             top = results[:n_top]
 
             sigma_a = np.radians(ANNEAL_SIGMA_ANGLE[min(rnd, len(ANNEAL_SIGMA_ANGLE)-1)])
@@ -75,7 +89,7 @@ class CushionShotPlanner:
 
             new_angles = []
             new_speeds = []
-            n_per = 5  # 각 후보 주변 5개 재샘플링
+            n_per = 5
             for t in top:
                 a = np.random.normal(t['angle'], sigma_a, n_per)
                 s = np.random.normal(t['speed'], sigma_s, n_per)
@@ -84,139 +98,324 @@ class CushionShotPlanner:
                 new_speeds.extend(s)
 
             new_results = self._evaluate_batch(
-                cue_2d, tgt_2d, obs_2d,
+                cue_2d, tgt1_2d, tgt2_2d, obs_2d,
                 np.array(new_angles), np.array(new_speeds), max_cushions
             )
             results = results[:n_top] + new_results
 
-        # 최적 선택
+        # 최적 선택 — 상위 후보들 리턴 (IK 검증에서 걸러질 수 있으므로)
         results.sort(key=lambda r: r['score'], reverse=True)
-        best = results[0]
 
-        # 2D 타격 방향 → EE 속도 역산
-        strike_dir_2d = np.array([np.cos(best['angle']), np.sin(best['angle'])])
-        ee_speed = ball_speed_to_ee_speed(best['speed'])
-        ee_speed = min(ee_speed, MAX_TOOL_SPEED)
+        # 각도가 유사한 후보 제거 (다양한 방향 확보)
+        top_candidates = []
+        for r in results:
+            if r['score'] < -1e5:  # 장애물 충돌 후보 제외
+                continue
+            angle_deg = np.degrees(r['angle']) % 360
+            too_close = False
+            for existing in top_candidates:
+                existing_deg = np.degrees(existing['angle']) % 360
+                diff = abs(angle_deg - existing_deg)
+                if diff > 180:
+                    diff = 360 - diff
+                if diff < 15:  # 15도 이내면 유사 후보
+                    too_close = True
+                    break
+            if not too_close:
+                top_candidates.append(r)
+            if len(top_candidates) >= 10:  # 최대 10개
+                break
 
-        return {
-            'strike_dir': strike_dir_2d,
-            'strike_speed': ee_speed,
-            'ball_speed': best['speed'],
-            'ball_path': best['path'],
-            'cushion_count': best['cushions'],
-            'score': best['score'],
-            'angle_deg': np.degrees(best['angle']),
-        }
+        if not top_candidates:
+            top_candidates = [results[0]]  # fallback
 
-    def _evaluate_batch(self, cue_2d, tgt_2d, obs_2d, angles, speeds, max_cushions):
-        """일괄 평가"""
+        # 각 후보를 dict으로 변환
+        candidates = []
+        for r in top_candidates:
+            strike_dir_2d = np.array([np.cos(r['angle']), np.sin(r['angle'])])
+            ee_speed = ball_speed_to_ee_speed(r['speed'])
+            ee_speed = min(ee_speed, MAX_TOOL_SPEED)
+            candidates.append({
+                'strike_dir': strike_dir_2d,
+                'strike_speed': ee_speed,
+                'ball_speed': r['speed'],
+                'ball_path': r['path'],
+                'cushion_count': r['cushions'],
+                'hit_t1': r.get('hit_t1', False),
+                'hit_t2': r.get('hit_t2', False),
+                'score': r['score'],
+                'angle_deg': np.degrees(r['angle']),
+            })
+
+        return candidates
+
+    def _evaluate_batch(self, cue_2d, tgt1_2d, tgt2_2d, obs_2d,
+                        angles, speeds, max_cushions):
         results = []
         for angle, speed in zip(angles, speeds):
             direction = np.array([np.cos(angle), np.sin(angle)])
-            path, hit, cushions, collided = self.simulate_ball_path(
-                cue_2d, direction, speed, obs_2d, max_cushions
+            sim = self.simulate_3ball(
+                cue_2d, tgt1_2d, tgt2_2d, direction, speed,
+                obs_2d, max_cushions
             )
-            score = self._score(path, tgt_2d, hit, cushions, collided)
+            score = self._score_3cushion(sim)
             results.append({
-                'angle': angle, 'speed': speed, 'path': path,
-                'hit': hit, 'cushions': cushions, 'score': score
+                'angle': angle, 'speed': speed,
+                'path': sim['cue_path'],
+                'hit_t1': sim['hit_t1'], 'hit_t2': sim['hit_t2'],
+                'cushions': sim['cushion_count'], 'score': score
             })
         return results
 
-    def simulate_ball_path(self, start, direction, speed, obstacles, max_cushions,
-                           dt=0.01, max_steps=500):
-        """2D 공 궤적 시뮬레이션 (기하학적 반사)
+    # ================================================================
+    # 3공 동시 2D 충돌 시뮬레이션
+    # ================================================================
+
+    def simulate_3ball(self, cue_start, tgt1_start, tgt2_start,
+                       direction, speed, obstacles, max_cushions,
+                       dt=0.005, max_steps=1000):
+        """3공 동시 2D 물리 시뮬레이션
+
+        Args:
+            cue_start: 큐볼 초기 위치 [x,y]
+            tgt1_start: 황구 초기 위치 [x,y]
+            tgt2_start: 적구 초기 위치 [x,y] (None 가능)
+            direction: 큐볼 초기 방향 (단위벡터)
+            speed: 큐볼 초기 속력
+            obstacles: [(x, y, radius), ...]
+            max_cushions: 쿠션 횟수 상한
 
         Returns:
-            path: [(x,y), ...] 궤적 포인트
-            hit_target: bool
-            cushion_count: int
-            collided_obstacle: bool
+            dict: cue_path, t1_path, t2_path, hit_t1, hit_t2,
+                  cushion_count, obstacle_bounces
         """
-        px, py = float(start[0]), float(start[1])
-        vx, vy = float(direction[0] * speed), float(direction[1] * speed)
-        path = [(px, py)]
-        cushion_count = 0
-        decay = 1 - ANNEAL_ROLLING_FRICTION * dt
+        r = self.ball_r
+        # PyBullet 반발계수 공식: e_combined = max(e1, e2)
+        e_cushion = max(MAZE_BALL_RESTITUTION, MAZE_CUSHION_RESTITUTION)  # 0.85
+        e_ball = max(MAZE_BALL_RESTITUTION, MAZE_BALL_RESTITUTION)        # 0.85
+        # 마찰 감쇠: rollingFriction + lateralFriction 근사
+        decay = 1 - (ANNEAL_ROLLING_FRICTION + MAZE_BALL_FRICTION * 0.05) * dt
 
-        xmin = self.bounds['x_min'] + self.ball_r
-        xmax = self.bounds['x_max'] - self.ball_r
-        ymin = self.bounds['y_min'] + self.ball_r
-        ymax = self.bounds['y_max'] - self.ball_r
-        e = MAZE_CUSHION_RESTITUTION
+        # 테이블 경계 (공 반지름 보정)
+        xmin = self.bounds['x_min'] + r
+        xmax = self.bounds['x_max'] - r
+        ymin = self.bounds['y_min'] + r
+        ymax = self.bounds['y_max'] - r
+
+        # 공 상태: [px, py, vx, vy]
+        balls = []
+        # 0: 큐볼
+        balls.append([float(cue_start[0]), float(cue_start[1]),
+                      float(direction[0] * speed), float(direction[1] * speed)])
+        # 1: 황구 (target1)
+        balls.append([float(tgt1_start[0]), float(tgt1_start[1]), 0.0, 0.0])
+        # 2: 적구 (target2)
+        if tgt2_start is not None:
+            balls.append([float(tgt2_start[0]), float(tgt2_start[1]), 0.0, 0.0])
+
+        n_balls = len(balls)
+        contact_r = 2 * r  # 공-공 접촉 거리
+        contact_r2 = contact_r ** 2
 
         # 장애물 사전 변환
-        obs_x = [o[0] for o in obstacles]
-        obs_y = [o[1] for o in obstacles]
-        obs_r2 = [(o[2] + self.ball_r) ** 2 for o in obstacles]
+        obs_list = [(o[0], o[1], o[2] + r) for o in obstacles]  # 반지름에 공 반지름 추가
 
-        for _ in range(max_steps):
-            vx *= decay
-            vy *= decay
-            if vx * vx + vy * vy < 2.5e-5:  # ~0.005 m/s
+        # 추적 변수
+        cushion_count = 0
+        obstacle_bounces = 0
+        hit_t1 = False
+        hit_t2 = False
+        cue_path = [(balls[0][0], balls[0][1])]
+        t1_path = [(balls[1][0], balls[1][1])]
+        t2_path = [(balls[2][0], balls[2][1])] if n_balls > 2 else []
+
+        # 충돌 쿨다운 (같은 쌍이 연속 충돌 방지)
+        cooldown = {}
+
+        for step in range(max_steps):
+            # --- 전체 속도 체크: 모든 공이 멈추면 종료 ---
+            total_v2 = 0
+            for b in balls:
+                total_v2 += b[2] ** 2 + b[3] ** 2
+            if total_v2 < 1e-4:  # ~0.01 m/s 전체
                 break
 
-            px += vx * dt
-            py += vy * dt
+            # --- 속도 감쇠 (마찰) ---
+            for b in balls:
+                b[2] *= decay
+                b[3] *= decay
 
-            # 쿠션 반사
-            reflected = False
-            if px <= xmin:
-                px = xmin
-                vx = abs(vx) * e
-                reflected = True
-            elif px >= xmax:
-                px = xmax
-                vx = -abs(vx) * e
-                reflected = True
-            if py <= ymin:
-                py = ymin
-                vy = abs(vy) * e
-                reflected = True
-            elif py >= ymax:
-                py = ymax
-                vy = -abs(vy) * e
-                reflected = True
+            # --- 위치 업데이트 ---
+            for b in balls:
+                b[0] += b[2] * dt
+                b[1] += b[3] * dt
 
-            if reflected:
-                cushion_count += 1
-                if cushion_count > max_cushions + 1:
-                    break
+            # --- 쿠션 반사 (각 공) ---
+            for bi, b in enumerate(balls):
+                reflected = False
+                if b[0] <= xmin:
+                    b[0] = xmin
+                    b[2] = abs(b[2]) * e_cushion
+                    reflected = True
+                elif b[0] >= xmax:
+                    b[0] = xmax
+                    b[2] = -abs(b[2]) * e_cushion
+                    reflected = True
+                if b[1] <= ymin:
+                    b[1] = ymin
+                    b[3] = abs(b[3]) * e_cushion
+                    reflected = True
+                elif b[1] >= ymax:
+                    b[1] = ymax
+                    b[3] = -abs(b[3]) * e_cushion
+                    reflected = True
 
-            # 장애물 충돌 판정 (제곱 비교로 sqrt 제거)
-            for i in range(len(obs_x)):
-                dx = px - obs_x[i]
-                dy = py - obs_y[i]
-                if dx * dx + dy * dy < obs_r2[i]:
-                    path.append((px, py))
-                    return path, False, cushion_count, True
+                if reflected and bi == 0:  # 큐볼 쿠션만 카운트
+                    cushion_count += 1
+                    if cushion_count > max_cushions + 2:
+                        break
 
-            path.append((px, py))
+            # --- 공-공 충돌 ---
+            for i in range(n_balls):
+                for j in range(i + 1, n_balls):
+                    pair_key = (i, j)
+                    # 쿨다운 체크
+                    if pair_key in cooldown and cooldown[pair_key] > 0:
+                        cooldown[pair_key] -= 1
+                        continue
 
-        return path, False, cushion_count, False
+                    dx = balls[i][0] - balls[j][0]
+                    dy = balls[i][1] - balls[j][1]
+                    dist2 = dx * dx + dy * dy
 
-    def _score(self, path, target_2d, hit, cushions, collided):
-        """스코어링 함수"""
-        if collided:
-            return -1e6
+                    if dist2 < contact_r2 and dist2 > 1e-10:
+                        dist = np.sqrt(dist2)
+                        # 법선 벡터 (i→j)
+                        nx = dx / dist
+                        ny = dy / dist
 
-        # 경로 중 목표공에 가장 가까운 거리 (벡터화)
-        pts = np.array(path)
-        dists = np.sqrt((pts[:, 0] - target_2d[0])**2 + (pts[:, 1] - target_2d[1])**2)
-        min_dist = dists.min()
+                        # 상대 속도의 법선 성분
+                        dvx = balls[i][2] - balls[j][2]
+                        dvy = balls[i][3] - balls[j][3]
+                        dvn = dvx * nx + dvy * ny
 
-        # 명중 판정 (2r 이내)
-        hit_threshold = self.ball_r * 2 + 0.005
-        hit_score = 1000 if min_dist < hit_threshold else 0
+                        # 접근 중일 때만 충돌 (이미 분리 중이면 무시)
+                        if dvn > 0:
+                            continue
 
-        # 거리 페널티
-        dist_penalty = -min_dist * 500
+                        # 동일 질량 2D 탄성 충돌:
+                        # 법선 방향 속도 성분만 교환
+                        impulse = -(1 + e_ball) * dvn / 2.0
+                        balls[i][2] += impulse * nx
+                        balls[i][3] += impulse * ny
+                        balls[j][2] -= impulse * nx
+                        balls[j][3] -= impulse * ny
 
-        # 쿠션 보너스 (3쿠션이면 추가 점수)
-        cushion_bonus = min(cushions, 3) * 30
+                        # 겹침 해제
+                        overlap = contact_r - dist
+                        if overlap > 0:
+                            balls[i][0] += nx * overlap * 0.5
+                            balls[i][1] += ny * overlap * 0.5
+                            balls[j][0] -= nx * overlap * 0.5
+                            balls[j][1] -= ny * overlap * 0.5
 
-        return hit_score + dist_penalty + cushion_bonus
+                        # 쿨다운 설정 (5 스텝)
+                        cooldown[pair_key] = 5
 
-    def find_best_shot(self, cue_pos, target_pos, obstacles):
-        """plan_shot의 편의 래퍼 — state_machine에서 호출용"""
-        return self.plan_shot(cue_pos, target_pos, obstacles)
+                        # 접촉 기록
+                        if i == 0 and j == 1:
+                            hit_t1 = True
+                        elif i == 0 and j == 2:
+                            hit_t2 = True
+
+            # --- 장애물 충돌 (반사) ---
+            for bi, b in enumerate(balls):
+                for ox, oy, combined_r in obs_list:
+                    dx = b[0] - ox
+                    dy = b[1] - oy
+                    dist2 = dx * dx + dy * dy
+                    cr2 = combined_r * combined_r
+
+                    if dist2 < cr2 and dist2 > 1e-10:
+                        dist = np.sqrt(dist2)
+                        # 법선 (장애물 중심 → 공 중심)
+                        nx = dx / dist
+                        ny = dy / dist
+
+                        # 법선 방향 속도 성분
+                        vn = b[2] * nx + b[3] * ny
+                        if vn < 0:  # 접근 중
+                            # 반사: 법선 방향 속도 반전
+                            b[2] -= 2 * vn * nx * e_cushion
+                            b[3] -= 2 * vn * ny * e_cushion
+
+                            # 겹침 해제
+                            overlap = combined_r - dist
+                            if overlap > 0:
+                                b[0] += nx * overlap
+                                b[1] += ny * overlap
+
+                            obstacle_bounces += 1
+
+            # --- 경로 기록 (매 5스텝) ---
+            if step % 5 == 0:
+                cue_path.append((balls[0][0], balls[0][1]))
+                t1_path.append((balls[1][0], balls[1][1]))
+                if n_balls > 2:
+                    t2_path.append((balls[2][0], balls[2][1]))
+
+            # 쿨다운 감소 (이미 위에서 처리)
+
+        return {
+            'cue_path': cue_path,
+            't1_path': t1_path,
+            't2_path': t2_path,
+            'hit_t1': hit_t1,
+            'hit_t2': hit_t2,
+            'cushion_count': cushion_count,
+            'obstacle_bounces': obstacle_bounces,
+        }
+
+    def _score_3cushion(self, sim):
+        """쓰리쿠션 스코어링
+
+        득점 조건: 큐볼이 두 목표공 모두 접촉 + 쿠션 3회 이상
+        """
+        hit_t1 = sim['hit_t1']
+        hit_t2 = sim['hit_t2']
+        cushions = sim['cushion_count']
+
+        # 쓰리쿠션 완전 득점
+        if hit_t1 and hit_t2 and cushions >= 3:
+            return 3000 + cushions * 10  # 최고 점수
+
+        # 두 공 접촉했지만 쿠션 부족
+        if hit_t1 and hit_t2:
+            return 2000 + cushions * 30  # 쿠션 늘리면 좋음
+
+        # 한 공만 접촉
+        score = 0
+        if hit_t1:
+            score += 1000
+        if hit_t2:
+            score += 1000
+
+        # 쿠션 보너스
+        score += min(cushions, 3) * 30
+
+        # 미접촉 공까지의 최소 거리 페널티
+        cue_path = np.array(sim['cue_path'])
+        if not hit_t1 and len(sim['t1_path']) > 0:
+            t1_last = np.array(sim['t1_path'][-1])
+            # 큐볼 궤적에서 t1까지 최소 거리
+            dists = np.sqrt((cue_path[:, 0] - t1_last[0])**2 +
+                           (cue_path[:, 1] - t1_last[1])**2)
+            score -= dists.min() * 500
+
+        if not hit_t2 and len(sim['t2_path']) > 0:
+            t2_last = np.array(sim['t2_path'][-1])
+            dists = np.sqrt((cue_path[:, 0] - t2_last[0])**2 +
+                           (cue_path[:, 1] - t2_last[1])**2)
+            score -= dists.min() * 500
+
+        return score

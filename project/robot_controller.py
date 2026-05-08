@@ -11,9 +11,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.core.pybullet_core import PybulletCore
-from src.utils import (
-    xyzeul2SE3, Rot2eul, eul2Rot, Rot2Vec, Vec2Rot
-)
+from src.utils import Rot2eul
 from project.ik_solver import IKSolver
 from project.config import *
 
@@ -49,10 +47,15 @@ class RobotController:
             joint_limit=True,
             constraint_visualization=False
         )
+        # 관절 한계를 프레임워크에서 가져와 IK에 전달
+        q_lo = np.array(self.pb.my_robot.q_lower).reshape(-1, 1)
+        q_hi = np.array(self.pb.my_robot.q_upper).reshape(-1, 1)
         self.ik = IKSolver(
             self.pb.my_robot.pinModel,
             gain=IK_GAIN,
-            damping=IK_DAMPING
+            damping=IK_DAMPING,
+            q_lower=q_lo,
+            q_upper=q_hi
         )
         if self.mode == 'real':
             try:
@@ -90,7 +93,13 @@ class RobotController:
         )
 
         self._pinModel = PinocchioModel('src/assets/urdf/indy7_v2/indy7_v2')
-        self.ik = IKSolver(self._pinModel, gain=IK_GAIN, damping=IK_DAMPING)
+        # Indy7 URDF 관절 한계 (rad) × SAFETY_FACTOR=0.95
+        _jl = 3.05432619099 * 0.95  # J0-J4
+        _j5 = 3.75245789179 * 0.95  # J5
+        q_lo = np.array([-_jl, -_jl, -_jl, -_jl, -_jl, -_j5]).reshape(-1, 1)
+        q_hi = np.array([ _jl,  _jl,  _jl,  _jl,  _jl,  _j5]).reshape(-1, 1)
+        self.ik = IKSolver(self._pinModel, gain=IK_GAIN, damping=IK_DAMPING,
+                           q_lower=q_lo, q_upper=q_hi)
 
         self._movable_joints = [0, 1, 2, 3, 4, 5]
         self._q_current = np.array(HOME_Q_RAD).reshape(-1, 1)
@@ -296,22 +305,22 @@ class RobotController:
             if hasattr(self.pb.my_robot, '_qdot_des'):
                 self.pb.my_robot._qdot_des = np.zeros([self.pb.my_robot.numJoints, 1])
 
-            # 즉시 후퇴
-            self.pb.MoveRobot(q_ready, degree=False)
-            time.sleep(0.3)
-
-            q_i = q_ready
+            # === 즉시 Home 복귀 (대기 없음) — 공이 로봇을 치기 전에 빠짐 ===
+            # PD 컨트롤러가 백그라운드에서 이동, 공 물리 동시 진행
+            self.pb.MoveRobot(list(HOME_Q_DEG), degree=True)
+            time.sleep(0.05)  # 최소 시뮬 진행
+            q_i = self.get_current_q()
         else:
             # fallback: 단순 임팩트 (strike_speed 미제공)
-            print(f"    [Strike] Simple impact → retract")
+            print(f"    [Strike] Simple impact -> retract")
             T_impact = trajectory[strike_end - 1]
             q_impact = self.ik.solve_step(q_i, T_impact)
             self.pb.MoveRobot(q_impact, degree=False)
-            time.sleep(0.3)
-            # 후퇴
-            self.pb.MoveRobot(q_ready, degree=False)
-            time.sleep(0.3)
-            q_i = q_ready
+            time.sleep(0.1)
+            # 즉시 Home (대기 없음)
+            self.pb.MoveRobot(list(HOME_Q_DEG), degree=True)
+            time.sleep(0.05)
+            q_i = self.get_current_q()
 
         self._q_current = q_i.copy()
 

@@ -27,7 +27,7 @@ class MazeEnvironment:
         self.obstacle_positions = []  # [(x, y, radius), ...]
         self.tool_id = None
 
-    def setup(self, cue_pos=None, target_pos=None,
+    def setup(self, cue_pos=None, target_pos=None, ball2_pos=None,
               num_obstacles=5, seed=None, obstacle_positions=None):
         """환경 초기화
 
@@ -50,29 +50,36 @@ class MazeEnvironment:
             'x_min': 0.5 - L / 2, 'x_max': 0.5 + L / 2,
             'y_min': CY - W / 2, 'y_max': CY + W / 2
         }
+        self._surface_z = H + TH / 2  # 테이블 표면 z 좌표
 
         if cue_pos is None:
             cue_pos = [0.5, CY - W / 4, ball_h]
         if target_pos is None:
             target_pos = [0.5, CY + W / 8, ball_h]
+        # 3번째 공 (쓰리쿠션: 백, 황, 적)
+        if ball2_pos is None:
+            ball2_pos = [0.5 + L / 6, CY, ball_h]
 
         self.cue_start_pos = np.array(cue_pos)
         self.target_start_pos = np.array(target_pos)
+        self.ball2_start_pos = np.array(ball2_pos)
 
         self._create_table()
         self._create_cushions()
         self._create_cue_ball(cue_pos)
         self._create_target_ball(target_pos)
+        self._create_ball2(ball2_pos)
 
         if obstacle_positions is not None:
             self._place_obstacles_manual(obstacle_positions)
         else:
             self._place_obstacles_random(num_obstacles, seed)
 
-        print(f"[Maze] Environment setup complete")
-        print(f"  Table: {L}m × {W}m, center Y={CY}")
-        print(f"  Cue ball: {cue_pos}")
-        print(f"  Target: {target_pos}")
+        print(f"[Maze] Environment setup complete (3-cushion)")
+        print(f"  Table: {L}m x {W}m, center Y={CY}")
+        print(f"  Cue (white): {cue_pos}")
+        print(f"  Target1 (yellow): {target_pos}")
+        print(f"  Target2 (red): {ball2_pos}")
         print(f"  Obstacles: {len(self.obstacle_positions)}")
 
     # ─── 테이블 & 쿠션 ─────────────────────────────────
@@ -140,7 +147,10 @@ class MazeEnvironment:
         self.cue_ball_id = self._create_ball(position, COLOR_WHITE)
 
     def _create_target_ball(self, position):
-        self.target_ball_id = self._create_ball(position, COLOR_RED)
+        self.target_ball_id = self._create_ball(position, COLOR_YELLOW)
+
+    def _create_ball2(self, position):
+        self.ball2_id = self._create_ball(position, COLOR_RED)
 
     # ─── 장애물 배치 ─────────────────────────────────
 
@@ -210,6 +220,11 @@ class MazeEnvironment:
                                                   physicsClientId=self.client)
         return np.array(pos)
 
+    def get_ball2_position(self):
+        pos, _ = p.getBasePositionAndOrientation(self.ball2_id,
+                                                  physicsClientId=self.client)
+        return np.array(pos)
+
     def get_ball_velocity(self, ball_id):
         vel, _ = p.getBaseVelocity(ball_id, physicsClientId=self.client)
         return np.array(vel)
@@ -221,14 +236,35 @@ class MazeEnvironment:
     def are_balls_stopped(self, threshold=0.005):
         v1 = np.linalg.norm(self.get_ball_velocity(self.cue_ball_id))
         v2 = np.linalg.norm(self.get_ball_velocity(self.target_ball_id))
-        return v1 < threshold and v2 < threshold
+        v3 = np.linalg.norm(self.get_ball_velocity(self.ball2_id))
+        return v1 < threshold and v2 < threshold and v3 < threshold
+
+    def is_ball_out_of_table(self, ball_id):
+        """공이 테이블 범위를 벗어났는지 확인"""
+        pos, _ = p.getBasePositionAndOrientation(ball_id,
+                                                  physicsClientId=self.client)
+        b = self.table_bounds
+        margin = 0.05  # 약간의 여유
+        if pos[0] < b['x_min'] - margin or pos[0] > b['x_max'] + margin:
+            return True
+        if pos[1] < b['y_min'] - margin or pos[1] > b['y_max'] + margin:
+            return True
+        if pos[2] < self._surface_z - 0.05:  # 테이블 아래로 떨어짐
+            return True
+        return False
 
     def is_target_hit(self, threshold=0.01):
-        """큐볼이 목표공에 충돌했는지 (근접 판정)"""
+        """쓰리쿠션: 큐볼이 두 목표공 모두에 접촉했는지 판정"""
         cue = self.get_cue_ball_position()
-        tgt = self.get_target_ball_position()
-        dist = np.linalg.norm(cue[:2] - tgt[:2])
-        return dist < MAZE_BALL_RADIUS * 2 + threshold
+        tgt1 = self.get_target_ball_position()
+        tgt2 = self.get_ball2_position()
+        d1 = np.linalg.norm(cue[:2] - tgt1[:2])
+        d2 = np.linalg.norm(cue[:2] - tgt2[:2])
+        contact_dist = MAZE_BALL_RADIUS * 2 + threshold
+        hit1 = d1 < contact_dist
+        hit2 = d2 < contact_dist
+        # 쓰리쿠션: 두 공 모두 접촉해야 득점
+        return hit1 and hit2
 
     def wait_balls_stop(self, timeout=10.0, check_interval=0.1):
         import time
@@ -240,18 +276,17 @@ class MazeEnvironment:
         return False
 
     def reset_balls(self, cue_pos=None, target_pos=None):
-        if cue_pos is None:
-            cue_pos = self.cue_start_pos
-        if target_pos is None:
-            target_pos = self.target_start_pos
-        p.resetBasePositionAndOrientation(self.cue_ball_id, list(cue_pos), [0,0,0,1],
-                                          physicsClientId=self.client)
-        p.resetBaseVelocity(self.cue_ball_id, [0,0,0], [0,0,0],
-                            physicsClientId=self.client)
-        p.resetBasePositionAndOrientation(self.target_ball_id, list(target_pos), [0,0,0,1],
-                                          physicsClientId=self.client)
-        p.resetBaseVelocity(self.target_ball_id, [0,0,0], [0,0,0],
-                            physicsClientId=self.client)
+        """공 위치 리셋 — None이면 해당 공은 건드리지 않음"""
+        if cue_pos is not None:
+            p.resetBasePositionAndOrientation(self.cue_ball_id, list(cue_pos), [0,0,0,1],
+                                              physicsClientId=self.client)
+            p.resetBaseVelocity(self.cue_ball_id, [0,0,0], [0,0,0],
+                                physicsClientId=self.client)
+        if target_pos is not None:
+            p.resetBasePositionAndOrientation(self.target_ball_id, list(target_pos), [0,0,0,1],
+                                              physicsClientId=self.client)
+            p.resetBaseVelocity(self.target_ball_id, [0,0,0], [0,0,0],
+                                physicsClientId=self.client)
 
     # ─── 도구 & 충돌 관리 ─────────────────────────────
 
@@ -293,7 +328,7 @@ class MazeEnvironment:
         """
         num_joints = p.getNumJoints(robot_id, physicsClientId=self.client)
         env_bodies = ([self.table_id] + self.cushion_ids + self.obstacle_ids
-                      + [self.cue_ball_id, self.target_ball_id])
+                      + [self.cue_ball_id, self.target_ball_id, self.ball2_id])
         for env_body in env_bodies:
             if env_body is None:
                 continue
@@ -307,7 +342,7 @@ class MazeEnvironment:
             return
         # 테이블/쿠션/장애물/목표공과 충돌 비활성화
         no_collide = ([self.table_id] + self.cushion_ids + self.obstacle_ids
-                      + [self.target_ball_id])
+                      + [self.target_ball_id, self.ball2_id])
         for env_body in no_collide:
             if env_body is None:
                 continue

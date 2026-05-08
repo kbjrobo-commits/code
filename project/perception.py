@@ -56,10 +56,12 @@ class SimPerception(PerceptionInterface):
     def scan_environment(self):
         cue_pos = self.env.get_cue_ball_position()
         target_pos = self.env.get_target_ball_position()
+        ball2_pos = self.env.get_ball2_position() if hasattr(self.env, 'get_ball2_position') else None
         obstacles = self.env.get_obstacle_positions()
         return {
             'cue_pos': cue_pos,
             'target_pos': target_pos,
+            'ball2_pos': ball2_pos,
             'obstacles': obstacles,
             'table_bounds': getattr(self.env, 'table_bounds', None)
         }
@@ -68,12 +70,14 @@ class SimPerception(PerceptionInterface):
         self.env.wait_balls_stop(timeout=8.0)
         cue_pos = self.env.get_cue_ball_position()
         target_pos = self.env.get_target_ball_position()
+        ball2_pos = self.env.get_ball2_position() if hasattr(self.env, 'get_ball2_position') else None
         target_hit = self.env.is_target_hit()
         dist = np.linalg.norm(cue_pos[:2] - target_pos[:2])
         return {
             'target_hit': target_hit,
             'cue_pos': cue_pos,
             'target_pos': target_pos,
+            'ball2_pos': ball2_pos,
             'distance': dist
         }
 

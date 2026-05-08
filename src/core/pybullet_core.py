@@ -95,7 +95,8 @@ class PybulletCore:
 
         # Run core thread
         self.__isSimulation = False
-        self._thread = Thread(target=self._thread_main)
+        self.__isAlive = True  # 스레드 생존 플래그
+        self._thread = Thread(target=self._thread_main, daemon=True)
         self._thread.start()
 
         # Start simulation
@@ -103,19 +104,23 @@ class PybulletCore:
 
     def disconnect(self):
         """
-        Disconnect to Pybullet GUI
+        Disconnect to Pybullet GUI — 스레드 안전 종료
         """
 
         self.__isSimulation = False
-        time.sleep(1)
-        p.disconnect(physicsClientId=self.ClientId)
+        self.__isAlive = False       # 스레드 종료 신호
+        self._thread.join(timeout=3) # 스레드 종료 대기
+        try:
+            p.disconnect(physicsClientId=self.ClientId)
+        except Exception:
+            pass  # 이미 연결 해제된 경우 무시
         PRINT_BLUE("Disconnect Success!")
 
     def _thread_main(self):
         """
         Core thread of pybullet simulation framework
         """
-        while True:
+        while self.__isAlive:
             ts = time.time()
             if self.__isSimulation:
                 self._thread_pre()
