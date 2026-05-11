@@ -203,7 +203,7 @@ for rnd in range(1, NUM_ROUNDS + 1):
         ball_pos = env.get_ball_position()
         print(f"  공: {ball_pos}, 홀: {env.hole_pos}")
     elif DEMO_TYPE == 'maze':
-        scan = perception.scan()
+        scan = perception.scan_environment()
         ball_pos = scan['cue_pos']
         target_pos = scan['target_pos']
         ball2_pos = scan.get('ball2_pos')

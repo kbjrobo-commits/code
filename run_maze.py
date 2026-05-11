@@ -124,7 +124,7 @@ def _generate_maze_plots(controller, env, planner, traj_planner,
     import matplotlib.pyplot as plt
 
     # 현재 공 위치로 샘플 궤적 계산
-    scan = perception.scan()
+    scan = perception.scan_environment()
     cue_pos = scan['cue_pos']
     target_pos = scan['target_pos']
     ball2_pos = scan.get('ball2_pos')
