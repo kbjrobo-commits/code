@@ -53,23 +53,51 @@ def movej_both(q_deg, wait=True):
     if wait:
         wait_indy()
 
-def replay_trajectory_on_real(traj_SE3, label=""):
-    """SE3 궤적을 실제 로봇에서 teleop으로 재생"""
+def replay_trajectory_on_real(traj_SE3, phases=None, label=""):
+    """SE3 궤적을 실제 로봇에서 teleop으로 재생
+    
+    Approach 구간: 느린 속도 (vel_ratio=0.3)
+    Strike 구간: 빠른 속도 (vel_ratio=1.0)
+    Follow 구간: 감속 (vel_ratio=0.3)
+    """
     print(f"  [{label}] Teleop 재생: {len(traj_SE3)} pts...")
-    dT = 0.002
+    dT = 0.002  # 궤적 생성 시간 간격
     indy.start_teleop(0)
     time.sleep(1)
-    idx = 0
-    while idx < len(traj_SE3):
-        tic = time.time()
+    
+    # 서브샘플링: 실제 텔레옵은 매 포인트 전송이 불가하므로
+    # 접근은 50포인트마다, 타격은 5포인트마다 전송
+    for idx in range(0, len(traj_SE3)):
+        # 구간 판정
+        if phases:
+            in_strike = phases['strike'][0] <= idx < phases['strike'][1]
+            in_follow = phases['follow'][0] <= idx < phases['follow'][1]
+        else:
+            in_strike = False
+            in_follow = False
+        
+        # 서브샘플링: approach는 50점마다, strike/follow는 매 5점마다
+        if in_strike or in_follow:
+            if idx % 5 != 0 and idx != len(traj_SE3) - 1:
+                continue
+            vel = 1.0  # 타격: 최대 속도
+        else:
+            if idx % 50 != 0 and idx != len(traj_SE3) - 1:
+                continue
+            vel = 0.3  # 접근: 천천히
+        
         T_des = traj_SE3[idx]
         p_des = np.zeros(6)
-        p_des[0:3] = 1000 * T_des[0:3, 3]
+        p_des[0:3] = 1000 * T_des[0:3, 3]  # m → mm
         p_des[3:6] = Rot2eul(T_des[0:3, 0:3], seq='XYZ', degree=True)
-        indy.movetelel_abs(p_des, vel_ratio=0.5, acc_ratio=1)
-        toc = time.time()
-        didx = int((toc - tic) // dT) + 1
-        idx += didx
+        indy.movetelel_abs(p_des, vel_ratio=vel, acc_ratio=1)
+        
+        # 시간 동기화: 건너뛴 포인트 수 × dT만큼 대기
+        if in_strike or in_follow:
+            time.sleep(dT * 5)
+        else:
+            time.sleep(dT * 50)
+    
     wait_indy()
     indy.stop_teleop()
     print(f"  [{label}] 재생 완료")
@@ -87,8 +115,8 @@ print(f"실제 로봇 EE: {p_real[:3]} mm")
 print(f"오차: {np.linalg.norm(T_pin[:3,3]*1000 - np.array(p_real[:3])):.1f} mm")
 
 # %% Step 7: 데모 선택 + 라운드 수
-DEMO_TYPE = 'billiards'   # 'minigolf' 또는 'billiards'
-NUM_ROUNDS = 3 if DEMO_TYPE == 'billiards' else 1
+DEMO_TYPE = 'maze'   # 'minigolf', 'billiards', 또는 'maze' (3-cushion)
+NUM_ROUNDS = 3
 
 print(f"데모: {DEMO_TYPE}, 라운드: {NUM_ROUNDS}")
 
@@ -107,7 +135,27 @@ if DEMO_TYPE == 'minigolf':
     env.disable_tool_env_collision()
     tool_offset = TOOL_HEAD_LENGTH + MINIGOLF_BALL_RADIUS
     shot_planner = MinigolfShotPlanner()
-else:
+    perception = None
+elif DEMO_TYPE == 'maze':
+    from project.environment.maze_env import MazeEnvironment
+    from project.physics.cushion_planner import CushionShotPlanner
+    from project.perception import SimPerception
+    env = MazeEnvironment(pb.ClientId)
+    CY, W = MAZE_TABLE_CENTER_Y, MAZE_TABLE_WIDTH
+    H, TH = MAZE_TABLE_SURFACE_HEIGHT, MAZE_TABLE_HEIGHT
+    ball_h = H + TH/2 + MAZE_BALL_RADIUS + 0.001
+    env.setup(
+        cue_pos=[0.5, CY-W/4, ball_h],
+        target_pos=[0.5, CY+W/8, ball_h],
+        num_obstacles=5
+    )
+    env.disable_robot_env_collision(robot_id)
+    env.attach_compact_tool(robot_id, ee_link)
+    env.disable_tool_env_collision()
+    tool_offset = TOOL_HEAD_LENGTH + MAZE_BALL_RADIUS
+    shot_planner = CushionShotPlanner(table_bounds=env.table_bounds)
+    perception = SimPerception(env)
+else:  # billiards
     from project.environment.billiards_env import BilliardsEnvironment
     from project.physics.shot_planner import BilliardsShotPlanner
     env = BilliardsEnvironment(pb.ClientId)
@@ -120,6 +168,7 @@ else:
     env.disable_tool_env_collision()
     tool_offset = TOOL_HEAD_LENGTH + BILLIARD_BALL_RADIUS
     shot_planner = BilliardsShotPlanner()
+    perception = None
 
 # PD 게인 강화
 robot = pb.my_robot
@@ -143,13 +192,24 @@ for rnd in range(1, NUM_ROUNDS + 1):
     if DEMO_TYPE == 'minigolf':
         ball_pos = env.get_ball_position()
         print(f"  공: {ball_pos}, 홀: {env.hole_pos}")
+    elif DEMO_TYPE == 'maze':
+        scan = perception.scan()
+        ball_pos = scan['cue_pos']
+        target_pos = scan['target_pos']
+        ball2_pos = scan.get('ball2_pos')
+        obstacles = scan.get('obstacles', [])
+        print(f"  큐볼: {ball_pos[:2]}, 목표1: {target_pos[:2]}, 목표2: {ball2_pos[:2] if ball2_pos is not None else 'N/A'}")
+        if np.linalg.norm(ball_pos[:2]) > 0.70:
+            print(f"  큐볼 범위 밖 -> 리셋")
+            env.reset_balls(cue_pos=env.cue_start_pos)
+            time.sleep(0.5)
+            ball_pos = env.get_cue_ball_position()
     else:
         ball_pos = env.get_cue_ball_position()
         target_pos = env.get_target_ball_position()
         print(f"  큐볼: {ball_pos[:2]}, 목표공: {target_pos[:2]}")
-        # 도달 범위 확인
         if np.linalg.norm(ball_pos[:2]) > 0.70:
-            print(f"  큐볼 범위 밖 → 리셋")
+            print(f"  큐볼 범위 밖 -> 리셋")
             env.reset_balls(cue_pos=env.cue_start_pos)
             time.sleep(0.5)
             ball_pos = env.get_cue_ball_position()
@@ -164,6 +224,20 @@ for rnd in range(1, NUM_ROUNDS + 1):
         else:
             strike_dir, speed = shot_planner.plan_shot(ball_pos, env.hole_pos)
         strike_dir_3d = np.array(strike_dir).flatten()
+    elif DEMO_TYPE == 'maze':
+        print(f"  Headless 3D 탐색 중...")
+        candidates = shot_planner.plan_shot(ball_pos, target_pos, obstacles, ball2_pos=ball2_pos)
+        best = candidates[0]
+        strike_dir_2d = best['strike_dir']
+        speed = best['strike_speed']
+        angle_rad = np.radians(MAZE_STRIKE_ANGLE_DEG)
+        horiz = np.array(strike_dir_2d[:2]).flatten()
+        horiz = horiz / np.linalg.norm(horiz)
+        strike_dir_3d = np.array([
+            horiz[0]*np.cos(angle_rad), horiz[1]*np.cos(angle_rad), -np.sin(angle_rad)])
+        strike_dir_3d /= np.linalg.norm(strike_dir_3d)
+        print(f"  최적: score={best['score']:.0f}, cushions={best['cushion_count']}, "
+              f"hit_t1={best['hit_t1']}, hit_t2={best['hit_t2']}")
     else:
         result = shot_planner.find_best_pocket_shot(
             ball_pos, target_pos, env.pocket_positions)
@@ -183,7 +257,8 @@ for rnd in range(1, NUM_ROUNDS + 1):
 
     trajectory, phases = traj_planner.plan_strike(
         T_current=T_now, ball_pos=ball_pos, strike_direction=strike_dir_3d,
-        strike_speed=speed, approach_dist=0.06, follow_dist=0.05,
+        strike_speed=speed, approach_dist=STRIKE_APPROACH_DIST,
+        follow_dist=STRIKE_FOLLOW_DIST,
         strike_height=ball_pos[2], tool_offset=tool_offset)
 
     q_traj = ik.solve_trajectory(q_now, trajectory)
@@ -219,14 +294,25 @@ for rnd in range(1, NUM_ROUNDS + 1):
         env.wait_ball_stop(timeout=5.0)
         dist = env.get_distance_to_hole()
         success = env.is_hole_in()
-        print(f"  결과: 거리={dist:.4f}m {'★ 홀인원!' if success else ''}")
+        print(f"  결과: 거리={dist:.4f}m {'HOLE-IN-ONE!' if success else ''}")
+    elif DEMO_TYPE == 'maze':
+        env.wait_balls_stop(timeout=5.0)
+        cue_pos_f = env.get_cue_ball_position()
+        t1_pos = env.get_target_ball_position()
+        d1 = np.linalg.norm(cue_pos_f[:2] - t1_pos[:2])
+        d2 = 0
+        if hasattr(env, 'ball2_id'):
+            t2_pos = env.get_ball2_position()
+            d2 = np.linalg.norm(cue_pos_f[:2] - t2_pos[:2])
+        print(f"  결과: d(tgt1)={d1:.3f}m, d(tgt2)={d2:.3f}m")
+        success = False
     else:
         env.wait_balls_stop(timeout=5.0)
         success = env.is_pocketed()
-        print(f"  결과: {'★ 포켓 성공!' if success else '미스'}")
+        print(f"  결과: {'POCKETED!' if success else 'miss'}")
 
-    # 궤적 저장 + 홈 복귀
-    saved_trajectories.append(trajectory)
+    # 궤적 + phases 저장, 홈 복귀
+    saved_trajectories.append((trajectory, phases))
     pb.MoveRobot(HOME_Q_DEG, degree=True)
     time.sleep(1)
 
@@ -242,7 +328,8 @@ print("  REAL Round 1 재생")
 print("=" * 50)
 movej_both(HOME_Q_DEG, wait=True)
 time.sleep(1)
-replay_trajectory_on_real(saved_trajectories[0], "Round 1")
+traj_0, phases_0 = saved_trajectories[0]
+replay_trajectory_on_real(traj_0, phases=phases_0, label="Round 1")
 movej_both(HOME_Q_DEG, wait=True)
 print("Round 1 완료!")
 
@@ -253,7 +340,8 @@ if len(saved_trajectories) >= 2:
     print("=" * 50)
     movej_both(HOME_Q_DEG, wait=True)
     time.sleep(1)
-    replay_trajectory_on_real(saved_trajectories[1], "Round 2")
+    traj_1, phases_1 = saved_trajectories[1]
+    replay_trajectory_on_real(traj_1, phases=phases_1, label="Round 2")
     movej_both(HOME_Q_DEG, wait=True)
     print("Round 2 완료!")
 else:
@@ -266,7 +354,8 @@ if len(saved_trajectories) >= 3:
     print("=" * 50)
     movej_both(HOME_Q_DEG, wait=True)
     time.sleep(1)
-    replay_trajectory_on_real(saved_trajectories[2], "Round 3")
+    traj_2, phases_2 = saved_trajectories[2]
+    replay_trajectory_on_real(traj_2, phases=phases_2, label="Round 3")
     movej_both(HOME_Q_DEG, wait=True)
     print("Round 3 완료!")
 else:
