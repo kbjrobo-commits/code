@@ -181,6 +181,9 @@ class StrikeTrajectoryPlanner:
 
         # 3. Follow-through 위치: 임팩트 후 계속 전진
         follow_pos = impact_pos + strike_dir * follow_dist
+        # z 클램핑: 도구 끝이 테이블 면 아래로 내려가지 않도록
+        min_z = ball_pos[2] - offset[2]  # EE가 최소한 공 높이에서 도구 길이만큼 위
+        follow_pos[2] = max(follow_pos[2], min_z)
         T_follow = np.eye(4)
         T_follow[0:3, 0:3] = R_strike
         T_follow[0:3, 3] = follow_pos

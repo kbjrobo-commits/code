@@ -144,6 +144,8 @@ class CushionShotPlanner:
                 'strike_speed': ee_speed,
                 'ball_speed': r['speed'],
                 'ball_path': r.get('cue_path'),
+                'tgt1_path': r.get('tgt1_path'),
+                'tgt2_path': r.get('tgt2_path'),
                 'cushion_count': r.get('cushion_count', 0),
                 'hit_t1': r.get('hit_t1', False),
                 'hit_t2': r.get('hit_t2', False),
@@ -275,6 +277,8 @@ class CushionShotPlanner:
         cushion_set = set()  # 어떤 쿠션에 몇 번 닿았는지 (중복 카운트)
         cushion_contacts = 0
         cue_path = []
+        tgt1_path = []
+        tgt2_path = []
 
         # 이전 프레임 접촉 상태 (중복 카운트 방지)
         prev_cushion_contact = set()
@@ -282,10 +286,15 @@ class CushionShotPlanner:
         for step in range(max_steps):
             p.stepSimulation(physicsClientId=sim_id)
 
-            # 큐볼 위치 기록 (매 10스텝)
+            # 3공 위치 기록 (매 10스텝)
             if step % 10 == 0:
                 pos, _ = p.getBasePositionAndOrientation(cue_id, physicsClientId=sim_id)
                 cue_path.append([pos[0], pos[1]])
+                pos1, _ = p.getBasePositionAndOrientation(tgt1_id, physicsClientId=sim_id)
+                tgt1_path.append([pos1[0], pos1[1]])
+                if tgt2_id is not None:
+                    pos2, _ = p.getBasePositionAndOrientation(tgt2_id, physicsClientId=sim_id)
+                    tgt2_path.append([pos2[0], pos2[1]])
 
             # 접촉 판정
             contacts = p.getContactPoints(bodyA=cue_id, physicsClientId=sim_id)
@@ -328,6 +337,8 @@ class CushionShotPlanner:
             'hit_t1': hit_t1, 'hit_t2': hit_t2,
             'cushion_count': cushion_contacts,
             'cue_path': cue_path,
+            'tgt1_path': tgt1_path,
+            'tgt2_path': tgt2_path,
         }
 
     def _score_result(self, cue_id, tgt1_id, tgt2_id, sim_id,

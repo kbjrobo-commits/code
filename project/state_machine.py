@@ -349,17 +349,44 @@ class AutonomousStateMachine:
             self._strike_skipped = True
             return
 
-        # 시각화 (선택된 후보의 ball_path)
-        ball_path = chosen_candidate.get('ball_path')
-        if ball_path is not None and len(ball_path) > 1 and hasattr(self.env, 'client'):
+        # 시각화 (선택된 후보의 3공 궤적)
+        if hasattr(self.env, 'client'):
             import pybullet as _p
             surface_z = ball_pos[2]
-            for i in range(len(ball_path) - 1):
-                p1 = [ball_path[i][0], ball_path[i][1], surface_z]
-                p2 = [ball_path[i+1][0], ball_path[i+1][1], surface_z]
-                _p.addUserDebugLine(p1, p2, [0, 0.5, 1], lineWidth=2,
-                                   lifeTime=15, physicsClientId=self.env.client)
-            print(f"    [VIS] Planned ball path drawn ({len(ball_path)} pts)")
+
+            # 큐볼 경로 (파란색)
+            ball_path = chosen_candidate.get('ball_path')
+            if ball_path is not None and len(ball_path) > 1:
+                for i in range(len(ball_path) - 1):
+                    p1 = [ball_path[i][0], ball_path[i][1], surface_z]
+                    p2 = [ball_path[i+1][0], ball_path[i+1][1], surface_z]
+                    _p.addUserDebugLine(p1, p2, [0, 0.5, 1], lineWidth=3,
+                                       lifeTime=30, physicsClientId=self.env.client)
+
+            # 목표공1 경로 (노란색)
+            tgt1_path = chosen_candidate.get('tgt1_path')
+            if tgt1_path is not None and len(tgt1_path) > 1:
+                for i in range(len(tgt1_path) - 1):
+                    d = np.linalg.norm(np.array(tgt1_path[i]) - np.array(tgt1_path[i+1]))
+                    if d > 0.001:  # 멈춰있을 때는 안 그림
+                        p1 = [tgt1_path[i][0], tgt1_path[i][1], surface_z]
+                        p2 = [tgt1_path[i+1][0], tgt1_path[i+1][1], surface_z]
+                        _p.addUserDebugLine(p1, p2, [1, 0.9, 0], lineWidth=2,
+                                           lifeTime=30, physicsClientId=self.env.client)
+
+            # 목표공2 경로 (빨간색)
+            tgt2_path = chosen_candidate.get('tgt2_path')
+            if tgt2_path is not None and len(tgt2_path) > 1:
+                for i in range(len(tgt2_path) - 1):
+                    d = np.linalg.norm(np.array(tgt2_path[i]) - np.array(tgt2_path[i+1]))
+                    if d > 0.001:
+                        p1 = [tgt2_path[i][0], tgt2_path[i][1], surface_z]
+                        p2 = [tgt2_path[i+1][0], tgt2_path[i+1][1], surface_z]
+                        _p.addUserDebugLine(p1, p2, [1, 0.2, 0.2], lineWidth=2,
+                                           lifeTime=30, physicsClientId=self.env.client)
+
+            n_pts = len(ball_path) if ball_path else 0
+            print(f"    [VIS] 3-ball planned paths drawn (cue:{n_pts}pts)")
 
         print(f"  Trajectory: {len(trajectory)} points")
         print(f"    EE strike speed: {strike_speed:.3f} m/s")
