@@ -304,7 +304,7 @@ class RobotController:
             # 공/장애물에 닿지 않도록 현 위치에서 수직 상승 후 홈 복귀
             T_now = trajectory[-1].copy()
             T_lift = T_now.copy()
-            T_lift[2, 3] += 0.25  # 25cm 수직 상승
+            T_lift[2, 3] += 0.15  # 15cm 수직 상승 (쿠션 상단 + 여유)
             q_lift = self.ik.solve_step(q_follow, T_lift)
             self.pb.MoveRobot(q_lift, degree=False)
             time.sleep(0.8)  # 상승 대기
@@ -321,7 +321,7 @@ class RobotController:
             time.sleep(0.1)
             # 수직 상승 후 Home
             T_lift = T_impact.copy()
-            T_lift[2, 3] += 0.25
+            T_lift[2, 3] += 0.15  # 15cm 수직 상승
             q_lift = self.ik.solve_step(q_impact, T_lift)
             self.pb.MoveRobot(q_lift, degree=False)
             time.sleep(0.8)
