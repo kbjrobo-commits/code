@@ -16,7 +16,7 @@ ROBOT_IP = '192.168.0.10'      # 실제 로봇 IP
 # ============================================================
 HOME_Q_DEG = [0, -15, -75, 0, -90, 0]         # 홈 포지션 (deg)
 HOME_Q_RAD = np.array(HOME_Q_DEG) * np.pi / 180  # 홈 포지션 (rad)
-MAX_TOOL_SPEED = 1.0           # 최대 툴 속도 (m/s)
+MAX_TOOL_SPEED = 1.0           # 최대 툴 속도 (m/s) — 실제 하드웨어 제한
 
 # ============================================================
 # 궤적 생성 파라미터
@@ -78,9 +78,9 @@ BILLIARD_BALL_SPINNING_FRICTION = 0.02
 # 자루 없이 EE 끝에 직접 짧은 헤드만 부착
 # → 짧아서 안정적, 무게가 집중되어 임팩트 효과적
 
-TOOL_HEAD_LENGTH = 0.03         # 헤드 길이 (m) — 짧고 컴팩트
+TOOL_HEAD_LENGTH = 0.12         # 헤드 길이 (m) — 길게 하여 팔-장애물 클리어런스 확보
 TOOL_HEAD_RADIUS = 0.018        # 헤드 반지름 (m)
-TOOL_HEAD_MASS = 0.2            # 헤드 질량 (kg) — 적절한 무게 (과하면 불안정)
+TOOL_HEAD_MASS = 0.5            # 헤드 질량 (kg) — v_EE 1.0m/s → v_ball ~1.4m/s
 TOOL_HEAD_RESTITUTION = 0.9     # 반발 계수 — 높여서 임팩트 효과 강화
 TOOL_CONSTRAINT_FORCE = 5000    # Constraint 최대 힘 (N) — 높을수록 강성↑
 
@@ -127,8 +127,8 @@ MAZE_CUSHION_RESTITUTION = 0.8     # 쿠션 반발계수
 MAZE_BALL_RADIUS = 0.02625         # 큐볼 반지름 (m)
 MAZE_BALL_MASS = 0.17              # 큐볼 질량 (kg)
 MAZE_BALL_RESTITUTION = 0.85       # 큐볼 반발계수
-MAZE_BALL_FRICTION = 0.3
-MAZE_BALL_ROLLING_FRICTION = 0.02
+MAZE_BALL_FRICTION = 0.15           # 실제 당구공 수준 (0.3은 과도)
+MAZE_BALL_ROLLING_FRICTION = 0.005  # 실제 당구대 수준 (0.02는 과도)
 MAZE_STRIKE_ANGLE_DEG = 15         # 타격 각도 (대각선 내려치기)
 
 # ============================================================
@@ -139,6 +139,6 @@ ANNEAL_N_REFINE_ROUNDS = 3         # 정밀화 라운드 수
 ANNEAL_TOP_RATIO = 0.10            # 상위 선택 비율
 ANNEAL_SIGMA_ANGLE = [30, 5, 1]    # 각도 분산 축소 (degrees)
 ANNEAL_SIGMA_SPEED = [0.1, 0.03, 0.01]  # 속도 분산 축소 (m/s)
-ANNEAL_SPEED_RANGE = (0.15, 0.5)   # 타격 속도 범위 (m/s) — 공이 날아가지 않도록 제한
+ANNEAL_SPEED_RANGE = (0.5, 1.4)    # 공 속도 범위 (EE 1.0m/s + 0.5kg 헤드 → 최대 ~1.4m/s)
 ANNEAL_MAX_CUSHIONS = 6            # 최대 쿠션 반사 횟수 (저속이므로 더 많은 반사 허용)
 ANNEAL_ROLLING_FRICTION = 0.02     # PyBullet과 동일 (MAZE_BALL_ROLLING_FRICTION)
