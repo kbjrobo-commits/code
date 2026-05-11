@@ -78,7 +78,7 @@ BILLIARD_BALL_SPINNING_FRICTION = 0.02
 # 자루 없이 EE 끝에 직접 짧은 헤드만 부착
 # → 짧아서 안정적, 무게가 집중되어 임팩트 효과적
 
-TOOL_HEAD_LENGTH = 0.12         # 헤드 길이 (m) — 길게 하여 팔-장애물 클리어런스 확보
+TOOL_HEAD_LENGTH = 0.06         # 헤드 길이 (m) — 팔 과신전 없이 적당한 클리어런스
 TOOL_HEAD_RADIUS = 0.018        # 헤드 반지름 (m)
 TOOL_HEAD_MASS = 0.5            # 헤드 질량 (kg) — v_EE 1.0m/s → v_ball ~1.4m/s
 TOOL_HEAD_RESTITUTION = 0.9     # 반발 계수 — 높여서 임팩트 효과 강화

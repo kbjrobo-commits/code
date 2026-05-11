@@ -278,7 +278,7 @@ def _generate_maze_plots(controller, env, planner, traj_planner,
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='쓰리쿠션 당구 시뮬레이션')
-    parser.add_argument('--obstacles', type=int, default=5, help='장애물 개수 (기본: 5)')
+    parser.add_argument('--obstacles', type=int, default=0, help='장애물 개수 (기본: 0)')
     parser.add_argument('--attempts', type=int, default=3, help='시도 횟수 (기본: 3)')
     parser.add_argument('--view-time', type=int, default=15, help='결과 확인 시간 (초)')
     parser.add_argument('--seed', type=int, default=None, help='장애물 랜덤 시드')

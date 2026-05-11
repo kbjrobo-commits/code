@@ -157,7 +157,7 @@ elif DEMO_TYPE == 'maze':
     env.setup(
         cue_pos=[0.5, CY-W/4, ball_h],
         target_pos=[0.5, CY+W/8, ball_h],
-        num_obstacles=5
+        num_obstacles=0  # 순수 쓰리쿠션 (장애물 없음)
     )
     env.disable_robot_env_collision(robot_id)
     env.attach_compact_tool(robot_id, ee_link)
