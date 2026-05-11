@@ -300,15 +300,17 @@ class RobotController:
             # 스윙 시간 대기 (공을 관통하며 치는 시간)
             time.sleep(swing_time)
 
-            # === 스윙 완료 → 후퇴 ===
-            # 속도 목표 초기화 (제동 역할 복구)
-            if hasattr(self.pb.my_robot, '_qdot_des'):
-                self.pb.my_robot._qdot_des = np.zeros([self.pb.my_robot.numJoints, 1])
-
-            # === 즉시 Home 복귀 (대기 없음) — 공이 로봇을 치기 전에 빠짐 ===
-            # PD 컨트롤러가 백그라운드에서 이동, 공 물리 동시 진행
+            # === 즉시 후퇴: 수직 상승 → Home ===
+            # 공/장애물에 닿지 않도록 현 위치에서 수직 상승 후 홈 복귀
+            T_now = trajectory[-1].copy()
+            T_lift = T_now.copy()
+            T_lift[2, 3] += 0.25  # 25cm 수직 상승
+            q_lift = self.ik.solve_step(q_follow, T_lift)
+            self.pb.MoveRobot(q_lift, degree=False)
+            time.sleep(0.8)  # 상승 대기
+            # 상승 완료 후 Home
             self.pb.MoveRobot(list(HOME_Q_DEG), degree=True)
-            time.sleep(0.05)  # 최소 시뮬 진행
+            time.sleep(0.05)
             q_i = self.get_current_q()
         else:
             # fallback: 단순 임팩트 (strike_speed 미제공)
@@ -317,7 +319,12 @@ class RobotController:
             q_impact = self.ik.solve_step(q_i, T_impact)
             self.pb.MoveRobot(q_impact, degree=False)
             time.sleep(0.1)
-            # 즉시 Home (대기 없음)
+            # 수직 상승 후 Home
+            T_lift = T_impact.copy()
+            T_lift[2, 3] += 0.25
+            q_lift = self.ik.solve_step(q_impact, T_lift)
+            self.pb.MoveRobot(q_lift, degree=False)
+            time.sleep(0.8)
             self.pb.MoveRobot(list(HOME_Q_DEG), degree=True)
             time.sleep(0.05)
             q_i = self.get_current_q()

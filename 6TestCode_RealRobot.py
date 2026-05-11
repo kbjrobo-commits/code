@@ -98,9 +98,19 @@ def replay_trajectory_on_real(traj_SE3, phases=None, label=""):
         else:
             time.sleep(dT * 50)
     
+    # 수직 상승 후퇴
+    T_last = traj_SE3[-1].copy()
+    T_lift = T_last.copy()
+    T_lift[2, 3] += 0.25  # 25cm 상승
+    p_lift = np.zeros(6)
+    p_lift[0:3] = 1000 * T_lift[0:3, 3]
+    p_lift[3:6] = Rot2eul(T_lift[0:3, 0:3], seq='XYZ', degree=True)
+    indy.movetelel_abs(p_lift, vel_ratio=0.3, acc_ratio=1)
+    time.sleep(1.5)
+    
     wait_indy()
     indy.stop_teleop()
-    print(f"  [{label}] 재생 완료")
+    print(f"  [{label}] 재생 완료 (수직 상승 후퇴)")
 
 print("헬퍼 함수 정의 완료")
 
@@ -286,8 +296,12 @@ for rnd in range(1, NUM_ROUNDS + 1):
     time.sleep(swing_t)
     if hasattr(pb.my_robot, '_qdot_des'):
         pb.my_robot._qdot_des = np.zeros([6, 1])
-    pb.MoveRobot(q_ready, degree=False)
-    time.sleep(0.3)
+    # 수직 상승 후퇴 (공/장애물 회피)
+    T_lift = trajectory[-1].copy()
+    T_lift[2, 3] += 0.25  # 25cm 상승
+    q_lift = ik.solve_step(q_follow, T_lift)
+    pb.MoveRobot(q_lift, degree=False)
+    time.sleep(0.8)
 
     # --- OBSERVE ---
     if DEMO_TYPE == 'minigolf':
