@@ -53,64 +53,74 @@ def movej_both(q_deg, wait=True):
     if wait:
         wait_indy()
 
-def replay_trajectory_on_real(traj_SE3, phases=None, label=""):
-    """SE3 궤적을 실제 로봇에서 teleop으로 재생
+def replay_trajectory_on_real(traj_SE3, phases=None, label="", strike_speed=1.0):
+    """SE3 궤적을 실제 로봇에서 재생
     
-    Approach 구간: 느린 속도 (vel_ratio=0.3)
-    Strike 구간: 빠른 속도 (vel_ratio=1.0)
-    Follow 구간: 감속 (vel_ratio=0.3)
+    Phase 1 (Approach): Teleop으로 천천히 준비 위치까지 이동
+    Phase 2 (Strike):   Teleop 종료 → 단일 MoveL로 Follow-through 끝점까지 풀스윙
+    Phase 3 (Retract):  수직 상승 후 Home 복귀
+    
+    이유: Teleop은 프레임 단위 스트리밍이라 로봇 내부 안전 제어기가
+    가속을 억제하여 '밀어치기'가 됨. MoveL은 출발~도착을 한 번에 주므로
+    로봇이 자체 가속 프로파일을 그려 원하는 속도까지 도달 가능.
     """
-    print(f"  [{label}] Teleop 재생: {len(traj_SE3)} pts...")
-    dT = 0.002  # 궤적 생성 시간 간격
+    if phases is None:
+        phases = {'approach': (0, len(traj_SE3)),
+                  'strike': (len(traj_SE3), len(traj_SE3)),
+                  'follow': (len(traj_SE3), len(traj_SE3))}
+
+    approach_end = phases['approach'][1]
+    follow_end = phases['follow'][1] if phases['follow'][1] > 0 else len(traj_SE3)
+    
+    # ======== Phase 1: Approach (Teleop — 천천히) ========
+    print(f"  [{label}] Phase 1: Teleop Approach ({approach_end} pts)...")
+    dT = 0.002
     indy.start_teleop(0)
     time.sleep(1)
     
-    # 서브샘플링: 실제 텔레옵은 매 포인트 전송이 불가하므로
-    # 접근은 50포인트마다, 타격은 5포인트마다 전송
-    for idx in range(0, len(traj_SE3)):
-        # 구간 판정
-        if phases:
-            in_strike = phases['strike'][0] <= idx < phases['strike'][1]
-            in_follow = phases['follow'][0] <= idx < phases['follow'][1]
-        else:
-            in_strike = False
-            in_follow = False
-        
-        # 서브샘플링: approach는 50점마다, strike/follow는 매 5점마다
-        if in_strike or in_follow:
-            if idx % 5 != 0 and idx != len(traj_SE3) - 1:
-                continue
-            vel = 1.0  # 타격: 최대 속도
-        else:
-            if idx % 50 != 0 and idx != len(traj_SE3) - 1:
-                continue
-            vel = 0.3  # 접근: 천천히
-        
+    for idx in range(0, approach_end):
+        if idx % 50 != 0 and idx != approach_end - 1:
+            continue
         T_des = traj_SE3[idx]
         p_des = np.zeros(6)
-        p_des[0:3] = 1000 * T_des[0:3, 3]  # m → mm
+        p_des[0:3] = 1000 * T_des[0:3, 3]
         p_des[3:6] = Rot2eul(T_des[0:3, 0:3], seq='XYZ', degree=True)
-        indy.movetelel_abs(p_des, vel_ratio=vel, acc_ratio=1)
-        
-        # 시간 동기화: 건너뛴 포인트 수 × dT만큼 대기
-        if in_strike or in_follow:
-            time.sleep(dT * 5)
-        else:
-            time.sleep(dT * 50)
+        indy.movetelel_abs(p_des, vel_ratio=0.3, acc_ratio=1)
+        time.sleep(dT * 50)
     
-    # 수직 상승 후퇴
-    T_last = traj_SE3[-1].copy()
-    T_lift = T_last.copy()
+    wait_indy()
+    indy.stop_teleop()
+    print(f"  [{label}] Approach 완료 — 준비 위치 도달")
+    time.sleep(0.3)  # 안정화 대기
+    
+    # ======== Phase 2: Strike (단일 MoveL — 풀스윙) ========
+    # Follow-through 끝점을 타겟으로 단일 명령 전송
+    T_follow_end = traj_SE3[min(follow_end - 1, len(traj_SE3) - 1)]
+    p_target = np.zeros(6)
+    p_target[0:3] = 1000 * T_follow_end[0:3, 3]
+    p_target[3:6] = Rot2eul(T_follow_end[0:3, 0:3], seq='XYZ', degree=True)
+    
+    # vel_ratio: strike_speed를 로봇 최대 속도(~1m/s)에 대한 비율로 변환
+    # movel의 vel_ratio 범위는 0~100
+    vel_pct = np.clip(strike_speed / MAX_TOOL_SPEED * 100, 10, 100)
+    print(f"  [{label}] Phase 2: MoveL Strike! vel={vel_pct:.0f}%, acc=100%")
+    print(f"    Target: [{p_target[0]:.1f}, {p_target[1]:.1f}, {p_target[2]:.1f}] mm")
+    
+    indy.movel(p_target, vel_ratio=vel_pct, acc_ratio=100)
+    wait_indy()
+    print(f"  [{label}] Strike 완료!")
+    
+    # ======== Phase 3: 수직 상승 후퇴 ========
+    T_lift = T_follow_end.copy()
     T_lift[2, 3] += 0.15  # 15cm 상승
     p_lift = np.zeros(6)
     p_lift[0:3] = 1000 * T_lift[0:3, 3]
     p_lift[3:6] = Rot2eul(T_lift[0:3, 0:3], seq='XYZ', degree=True)
-    indy.movetelel_abs(p_lift, vel_ratio=0.3, acc_ratio=1)
-    time.sleep(1.5)
     
+    print(f"  [{label}] Phase 3: Vertical lift + Home")
+    indy.movel(p_lift, vel_ratio=30, acc_ratio=100)
     wait_indy()
-    indy.stop_teleop()
-    print(f"  [{label}] 재생 완료 (수직 상승 후퇴)")
+    print(f"  [{label}] 전체 완료")
 
 print("헬퍼 함수 정의 완료")
 

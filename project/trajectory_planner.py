@@ -105,7 +105,7 @@ class StrikeTrajectoryPlanner:
         strike_dir = np.array(strike_direction).flatten()
         strike_dir = strike_dir / np.linalg.norm(strike_dir)
 
-        # z축: 타격 방향 (도구 축)
+        # z축: 타격 방향 (도구 축 = strike_dir 방향으로 설정)
         z_axis = strike_dir.copy()
 
         # x축: world up × z로 수평 방향 결정

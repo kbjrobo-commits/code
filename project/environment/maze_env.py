@@ -312,7 +312,7 @@ class MazeEnvironment:
         cid = p.createConstraint(parentBodyUniqueId=robot_id, parentLinkIndex=ee_link_index,
                                  childBodyUniqueId=head_id, childLinkIndex=-1,
                                  jointType=p.JOINT_FIXED, jointAxis=[0, 0, 0],
-                                 parentFramePosition=[0, 0, -head_length / 2],
+                                 parentFramePosition=[0, 0, head_length / 2],
                                  childFramePosition=[0, 0, 0],
                                  physicsClientId=self.client)
         p.changeConstraint(cid, maxForce=TOOL_CONSTRAINT_FORCE, physicsClientId=self.client)

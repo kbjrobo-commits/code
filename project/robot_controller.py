@@ -353,23 +353,29 @@ class RobotController:
         self._wait_indy()
         print(f"    [Real] Approach complete")
 
-        # Phase 2: Strike + Follow — 1kHz teleop 스트리밍
-        strike_traj = trajectory[approach_end:]
-        print(f"    [Real] Strike streaming: {len(strike_traj)} pts @ 1kHz...")
-        self.indy.start_teleop(0)
-        time.sleep(0.3)
+        # Phase 2: Strike — 단일 MoveL로 풀스윙
+        # Follow-through 끝점을 타겟으로 단일 명령 전송
+        follow_end = phase_indices.get('follow', (0, 0))[1]
+        if follow_end <= 0:
+            follow_end = len(trajectory)
+        T_follow_end = trajectory[min(follow_end - 1, len(trajectory) - 1)]
+        p_target = self._SE3_to_task_pose(T_follow_end)
 
-        idx = 0
-        while idx < len(strike_traj):
-            tic = time.time()
-            p_des = self._SE3_to_task_pose(strike_traj[idx])
-            self.indy.movetelel_abs(p_des, vel_ratio=1.0, acc_ratio=1.0)
-            toc = time.time()
-            idx += max(1, int((toc - tic) / dt))
-
+        strike_speed = kwargs.get('strike_speed', 1.0)
+        vel_pct = np.clip(strike_speed / MAX_TOOL_SPEED * 100, 10, 100)
+        print(f"    [Real] MoveL Strike! vel={vel_pct:.0f}%, acc=100%")
+        self.indy.movel(p_target, vel_ratio=vel_pct, acc_ratio=100)
         self._wait_indy()
-        self.indy.stop_teleop()
         print(f"    [Real] Strike complete")
+
+        # Phase 3: 수직 상승 후퇴
+        T_lift = T_follow_end.copy()
+        T_lift[2, 3] += 0.15
+        p_lift = self._SE3_to_task_pose(T_lift)
+        print(f"    [Real] Vertical lift...")
+        self.indy.movel(p_lift, vel_ratio=30, acc_ratio=100)
+        self._wait_indy()
+        print(f"    [Real] Retract complete")
 
     def _execute_real_uniform(self, trajectory, dt):
         """기존 호환용: 전체 궤적 균일 teleop 재생"""

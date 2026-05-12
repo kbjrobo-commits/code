@@ -352,7 +352,7 @@ class BilliardsEnvironment:
             childLinkIndex=-1,
             jointType=p.JOINT_FIXED,
             jointAxis=[0, 0, 0],
-            parentFramePosition=[0, 0, -head_length / 2],
+            parentFramePosition=[0, 0, head_length / 2],
             childFramePosition=[0, 0, 0],
             physicsClientId=self.client
         )
