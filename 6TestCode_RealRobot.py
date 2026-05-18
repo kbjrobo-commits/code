@@ -88,10 +88,10 @@ def replay_trajectory_on_real(traj_SE3, phases=None, label="", strike_speed=1.0)
         indy.movetelel_abs(p_des, vel_ratio=0.3, acc_ratio=1)
         time.sleep(dT * 50)
     
-    wait_indy()
+    time.sleep(0.5)  # teleop 마지막 명령 도달 대기
     indy.stop_teleop()
     print(f"  [{label}] Approach 완료 — 준비 위치 도달")
-    time.sleep(0.3)  # 안정화 대기
+    time.sleep(0.5)  # 안정화 대기
     
     # ======== Phase 2: Strike (단일 MoveL — 풀스윙) ========
     # Follow-through 끝점을 타겟으로 단일 명령 전송
