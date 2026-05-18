@@ -204,7 +204,8 @@ class RobotController:
             self._execute_sim(trajectory_SE3, dt, visualize, phase_indices,
                               strike_speed=strike_speed)
         elif self.mode == 'real':
-            self._execute_real(trajectory_SE3, dt, phase_indices=phase_indices)
+            self._execute_real(trajectory_SE3, dt, phase_indices=phase_indices,
+                               strike_speed=strike_speed)
 
     def _execute_headless(self, trajectory, dt):
         import pybullet as p
