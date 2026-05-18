@@ -88,10 +88,11 @@ def replay_trajectory_on_real(traj_SE3, phases=None, label="", strike_speed=1.0)
         indy.movetelel_abs(p_des, vel_ratio=0.3, acc_ratio=1)
         time.sleep(dT * 50)
     
-    time.sleep(0.5)  # teleop 마지막 명령 도달 대기
+    # Teleop 종료 — wait_indy()는 teleop 모드에서 is_in_motion이 불안정하므로 사용하지 않음
+    time.sleep(0.5)
     indy.stop_teleop()
+    time.sleep(0.5)  # 안정화 대기 (로봇이 완전히 teleop 모드를 빠져나올 시간)
     print(f"  [{label}] Approach 완료 — 준비 위치 도달")
-    time.sleep(0.5)  # 안정화 대기
     
     # ======== Phase 2: Strike (단일 MoveL — 풀스윙) ========
     # Follow-through 끝점을 타겟으로 단일 명령 전송
@@ -106,7 +107,7 @@ def replay_trajectory_on_real(traj_SE3, phases=None, label="", strike_speed=1.0)
     print(f"  [{label}] Phase 2: MoveL Strike! vel={vel_pct:.0f}%, acc=100%")
     print(f"    Target: [{p_target[0]:.1f}, {p_target[1]:.1f}, {p_target[2]:.1f}] mm")
     
-    indy.movel(p_target, vel_ratio=vel_pct, acc_ratio=100)
+    indy.movel(list(p_target), vel_ratio=vel_pct, acc_ratio=100)
     wait_indy()
     print(f"  [{label}] Strike 완료!")
     
