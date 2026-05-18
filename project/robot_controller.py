@@ -352,13 +352,13 @@ class RobotController:
             p_des = self._SE3_to_task_pose(T_des)
             self.indy.movetelel_abs(p_des, vel_ratio=0.3, acc_ratio=1)
             time.sleep(dT * 50)
-        self._wait_indy()
+        # Teleop 종료 (wait_indy는 teleop 밖에서)
+        time.sleep(0.5)
         self.indy.stop_teleop()
-        time.sleep(0.3)  # 정렬 안정화
+        time.sleep(0.5)  # 정렬 안정화
         print(f"    [Real] Approach complete")
 
         # Phase 2: Strike — 단일 MoveL로 풀스윙
-        # Follow-through 끝점을 타겟으로 단일 명령 전송
         follow_end = phase_indices.get('follow', (0, 0))[1]
         if follow_end <= 0:
             follow_end = len(trajectory)
@@ -368,6 +368,7 @@ class RobotController:
         strike_speed = kwargs.get('strike_speed', 1.0)
         vel_pct = np.clip(strike_speed / MAX_TOOL_SPEED * 100, 10, 100)
         print(f"    [Real] MoveL Strike! vel={vel_pct:.0f}%, acc=100%")
+        print(f"    Target: [{p_target[0]:.1f}, {p_target[1]:.1f}, {p_target[2]:.1f}] mm")
         self.indy.movel(p_target, vel_ratio=vel_pct, acc_ratio=100)
         self._wait_indy()
         print(f"    [Real] Strike complete")
