@@ -270,45 +270,39 @@ class RobotController:
         follow_range = phase_indices.get('follow', (strike_end, strike_end))
 
         if strike_speed is not None and strike_speed > 0.01:
-            print(f"    [Strike] Impact at {strike_speed:.3f} m/s → swing-through")
+            print(f"    [Strike] Impact at {strike_speed:.3f} m/s → impact-and-retract")
 
-            # Follow-through 끝 지점 (공 너머 5cm) = 스윙의 최종 목표
-            T_follow = trajectory[-1]
-            q_follow = self.ik.solve_step(q_i, T_follow)
-
-            # === 가속 시작: 공 6cm 앞에서 MoveRobot(q_follow)로 먼 목표 설정 ===
-            # PD 제어기는 먼 목표를 향해 큰 토크를 발생시켜 강하게 가속
-            # 동시에 qdot_des를 주입하여 Kd 브레이크(감쇠)를 부스터로 전환
-
-            # 가속에 필요한 시간 추정
+            # 임팩트 지점 = 도구가 공에 닿는 위치
             T_impact = trajectory[strike_end - 1]
+            q_impact = self.ik.solve_step(q_i, T_impact)
+
+            # 가속 시간: 준비위치→임팩트 거리 기반
             p_ready = T_ready[0:3, 3]
-            p_follow = T_follow[0:3, 3]
-            full_dist = np.linalg.norm(p_follow - p_ready)
-            # 총 스윙 거리에 대해 평균 속도로 가속 시간 계산
-            swing_time = full_dist / (strike_speed * 0.7)
-            swing_time = np.clip(swing_time, 0.05, 0.8)
+            p_impact = T_impact[0:3, 3]
+            strike_dist = np.linalg.norm(p_impact - p_ready)
+            swing_time = strike_dist / (strike_speed * 0.7)
+            swing_time = np.clip(swing_time, 0.05, 0.5)
 
             # 관절 공간에서의 목표 속도 계산
-            avg_qdot = (q_follow - q_ready) / swing_time
+            avg_qdot = (q_impact - q_ready) / swing_time
             if hasattr(self.pb.my_robot, '_qdot_des'):
                 self.pb.my_robot._qdot_des = avg_qdot
 
-            # 풀스윙 목표 설정 → PD가 큰 위치 오차 + 양의 속도 목표로 강하게 가속
-            self.pb.MoveRobot(q_follow, degree=False)
+            # 임팩트 지점까지만 스윙 (follow-through 없음)
+            # → PD 목표가 임팩트점이므로 공 접촉 후 자연 감속
+            # → headless 자유물체 충돌과 동일한 에너지 전달
+            self.pb.MoveRobot(q_impact, degree=False)
 
-            # 스윙 시간 대기 (공을 관통하며 치는 시간)
+            # 스윙 시간 대기
             time.sleep(swing_time)
 
             # === 즉시 후퇴: 수직 상승 → Home ===
-            # 공/장애물에 닿지 않도록 현 위치에서 수직 상승 후 홈 복귀
-            T_now = trajectory[-1].copy()
+            T_now = T_impact.copy()
             T_lift = T_now.copy()
-            T_lift[2, 3] += 0.15  # 15cm 수직 상승 (쿠션 상단 + 여유)
-            q_lift = self.ik.solve_step(q_follow, T_lift)
+            T_lift[2, 3] += 0.15  # 15cm 수직 상승
+            q_lift = self.ik.solve_step(q_impact, T_lift)
             self.pb.MoveRobot(q_lift, degree=False)
-            time.sleep(0.8)  # 상승 대기
-            # 상승 완료 후 Home
+            time.sleep(0.8)
             self.pb.MoveRobot(list(HOME_Q_DEG), degree=True)
             time.sleep(0.05)
             q_i = self.get_current_q()
@@ -345,12 +339,21 @@ class RobotController:
 
         approach_end = phase_indices['approach'][1]
 
-        # Phase 1: Approach — movel로 안전하게 접근
-        T_ready = trajectory[approach_end - 1]
-        p_ready = self._SE3_to_task_pose(T_ready)
-        print(f"    [Real] Approach via movel...")
-        self.indy.movel(p_ready)
+        # Phase 1: Approach — Teleop 스트리밍으로 장애물 우회 접근
+        print(f"    [Real] Approach via teleop ({approach_end} pts)...")
+        self.indy.start_teleop(0)
+        time.sleep(1)
+        dT = 0.002
+        for idx in range(0, approach_end):
+            if idx % 50 != 0 and idx != approach_end - 1:
+                continue
+            T_des = trajectory[idx]
+            p_des = self._SE3_to_task_pose(T_des)
+            self.indy.movetelel_abs(p_des, vel_ratio=0.3, acc_ratio=1)
+            time.sleep(dT * 50)
         self._wait_indy()
+        self.indy.stop_teleop()
+        time.sleep(0.3)  # 정렬 안정화
         print(f"    [Real] Approach complete")
 
         # Phase 2: Strike — 단일 MoveL로 풀스윙

@@ -139,6 +139,6 @@ ANNEAL_N_REFINE_ROUNDS = 3         # 정밀화 라운드 수
 ANNEAL_TOP_RATIO = 0.10            # 상위 선택 비율
 ANNEAL_SIGMA_ANGLE = [30, 5, 1]    # 각도 분산 축소 (degrees)
 ANNEAL_SIGMA_SPEED = [0.1, 0.03, 0.01]  # 속도 분산 축소 (m/s)
-ANNEAL_SPEED_RANGE = (0.5, 1.4)    # 공 속도 범위 (EE 1.0m/s + 0.5kg 헤드 → 최대 ~1.4m/s)
+ANNEAL_SPEED_RANGE = (0.3, 1.0)    # EE 속도 범위 (m/s) — 도구(0.5kg) 물리 타격
 ANNEAL_MAX_CUSHIONS = 6            # 최대 쿠션 반사 횟수 (저속이므로 더 많은 반사 허용)
 ANNEAL_ROLLING_FRICTION = 0.02     # PyBullet과 동일 (MAZE_BALL_ROLLING_FRICTION)
