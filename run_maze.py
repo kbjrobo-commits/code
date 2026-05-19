@@ -57,14 +57,15 @@ def run_maze(num_obstacles=5, max_attempts=3, view_time=15,
     robot_id = controller.pb.my_robot.robotId
     ee_link = controller.pb.my_robot.RobotEEJointIdx[-1]
 
+    CX = MAZE_TABLE_CENTER_X
     CY, W = MAZE_TABLE_CENTER_Y, MAZE_TABLE_WIDTH
     H, TH = MAZE_TABLE_SURFACE_HEIGHT, MAZE_TABLE_HEIGHT
     ball_h = H + TH / 2 + MAZE_BALL_RADIUS + 0.001
 
     env = MazeEnvironment(controller.pb.ClientId)
     env.setup(
-        cue_pos=[0.5, CY - W / 4, ball_h],
-        target_pos=[0.5, CY + W / 8, ball_h],
+        cue_pos=[CX, CY - W / 4, ball_h],
+        target_pos=[CX, CY + W / 8, ball_h],
         num_obstacles=num_obstacles,
         seed=seed
     )
@@ -78,6 +79,29 @@ def run_maze(num_obstacles=5, max_attempts=3, view_time=15,
 
     controller.boost_pd_gains(kp=800, kd=40)
     time.sleep(3)
+
+    # ── 1b. GUI 워크스페이스 반경 표시 ──
+    import pybullet as _p
+    client = controller.pb.ClientId
+    surface_z = MAZE_TABLE_SURFACE_HEIGHT + MAZE_TABLE_HEIGHT / 2 + 0.002
+    n_seg = 64
+    for radius, color, label in [
+        (0.70, [0, 1, 0], "safe"),    # 안전 범위 (녹색)
+        (0.80, [1, 0.5, 0], "max"),   # 물리적 한계 (주황)
+    ]:
+        for i in range(n_seg):
+            th0 = 2 * np.pi * i / n_seg
+            th1 = 2 * np.pi * (i + 1) / n_seg
+            x0, y0 = radius * np.cos(th0), radius * np.sin(th0)
+            x1, y1 = radius * np.cos(th1), radius * np.sin(th1)
+            _p.addUserDebugLine(
+                [x0, y0, surface_z], [x1, y1, surface_z],
+                color, lineWidth=2, lifeTime=0, physicsClientId=client)
+    # 로봇 베이스 표시
+    _p.addUserDebugText("ROBOT", [0, 0, surface_z + 0.02],
+                        textColorRGB=[1, 1, 1], textSize=1.2,
+                        physicsClientId=client)
+    print(f"  [VIS] Workspace: safe=0.70m (green), max=0.80m (orange)")
 
     # ── 2. 궤적 생성기 + 상태머신 ──
     traj_planner = StrikeTrajectoryPlanner(approach_duration=3.0, dt=0.002)

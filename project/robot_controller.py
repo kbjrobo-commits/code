@@ -29,6 +29,7 @@ class RobotController:
         self._pinModel = None
         self._q_current = None
         self._client_id = None
+        self._env = None  # 환경 참조 — 임팩트 후 도구 충돌 비활성화용
 
         if mode == 'real' and robot_ip is None:
             robot_ip = ROBOT_IP
@@ -187,13 +188,20 @@ class RobotController:
         robot._compute_torque_input = _boosted_torque_input
         print(f"[RobotController] PD gains boosted: Kp={kp}, Kd={kd}")
 
+    def set_environment(self, env):
+        """환경 참조 설정 — 임팩트 후 도구-큐볼 충돌 비활성화에 필요"""
+        self._env = env
+
     def execute_trajectory(self, trajectory_SE3, dt=None, visualize=True,
-                           phase_indices=None, strike_speed=None):
+                           phase_indices=None, strike_speed=None,
+                           ball_velocity=None, q_trajectory=None):
         """SE3 궤적 실행
 
         phase_indices가 있으면:
         - Approach: 정밀 접근 (매 포인트 time.sleep)
-        - Strike+Follow: 속도 제어 포인트-by-포인트 추적 (strike_speed 기반)
+        - Strike: ball_velocity가 있으면 공에 직접 속도 부여
+        
+        ball_velocity: [vx, vy] — 공에 직접 부여할 수평 속도
         """
         if dt is None:
             dt = TRAJECTORY_DT
@@ -202,7 +210,9 @@ class RobotController:
             self._execute_headless(trajectory_SE3, dt)
         elif self.mode == 'sim':
             self._execute_sim(trajectory_SE3, dt, visualize, phase_indices,
-                              strike_speed=strike_speed)
+                              strike_speed=strike_speed,
+                              ball_velocity=ball_velocity,
+                              q_trajectory=q_trajectory)
         elif self.mode == 'real':
             self._execute_real(trajectory_SE3, dt, phase_indices=phase_indices,
                                strike_speed=strike_speed)
@@ -223,8 +233,13 @@ class RobotController:
         self._q_current = q_i.copy()
 
     def _execute_sim(self, trajectory, dt, visualize=True, phase_indices=None,
-                      strike_speed=None):
-        """시뮬레이션 모드 궤적 실행 — 타격 후 즉시 후퇴"""
+                      strike_speed=None, ball_velocity=None, q_trajectory=None):
+        """시뮬레이션 모드 궤적 실행 — 순수 PD 제어 (실제 로봇 대응)
+        
+        Approach: PD 제어 (Kp=800) → Ready 수렴 대기
+        Strike: PD 고게인 (Kp=5000) 240Hz 스트리밍
+        Post: 공 구름 관찰 + 접촉 추적
+        """
         q_i = self.get_current_q()
 
         if visualize and self.pb is not None:
@@ -240,90 +255,223 @@ class RobotController:
             self._q_current = q_i.copy()
             return
 
-        # === Phase-aware 실행 ===
+        import pybullet as _p
+        env = self._env
+        client = self.pb.ClientId
+        robot = self.pb.my_robot
+
+        # === Phase 1: Approach (2-waypoint: Above → Ready) ===
         approach_range = phase_indices.get('approach', (0, 0))
-        strike_range = phase_indices.get('strike', (0, 0))
+        n_approach = approach_range[1] - approach_range[0]
+        print(f"    [Approach] {n_approach} pts")
 
-        # Phase 1: Approach (정밀 접근 — cubic time scaling)
-        print(f"    [Approach] {approach_range[1] - approach_range[0]} pts")
-        for i in range(approach_range[0], approach_range[1]):
-            q_i = self.ik.solve_step(q_i, trajectory[i])
-            self.pb.MoveRobot(q_i, degree=False)
-            time.sleep(dt)
+        # 상공 경유점 (approach 전반부의 끝점)과 ready (approach 끝점)
+        T_ready = trajectory[approach_range[1] - 1]
+        ready_pos = T_ready[:3, 3]
+        ready_z = T_ready[:3, 2]
 
-        # Approach 끝 = 타격 준비 위치 (공 뒤 approach_dist)
-        q_ready = q_i.copy()
-        T_ready = trajectory[approach_range[1] - 1] if approach_range[1] > 0 else trajectory[0]
+        # 상공 위치: ready 위 25cm
+        above_pos = ready_pos.copy()
+        above_pos[2] = ready_pos[2] + 0.25
 
-        # Approach 끝에서 안정화 대기
-        time.sleep(0.5)
-
-        # Phase 2: Strike — 실제 임펄스 타격 (치기, 밀기 아님)
-        # 핵심 아이디어: 접근 단계 마지막 부분에서 이미 가속을 시작하여
-        # 공에 닿는 순간 EE가 이미 목표 속도에 도달해 있도록 함
-        strike_start = strike_range[0]
-        strike_end = strike_range[1]
-
-        if strike_end <= strike_start:
-            self._q_current = q_i.copy()
-            return
-
-        follow_range = phase_indices.get('follow', (strike_end, strike_end))
-
-        if strike_speed is not None and strike_speed > 0.01:
-            print(f"    [Strike] Impact at {strike_speed:.3f} m/s → impact-and-retract")
-
-            # 임팩트 지점 = 도구가 공에 닿는 위치
-            T_impact = trajectory[strike_end - 1]
-            q_impact = self.ik.solve_step(q_i, T_impact)
-
-            # 가속 시간: 준비위치→임팩트 거리 기반
-            p_ready = T_ready[0:3, 3]
-            p_impact = T_impact[0:3, 3]
-            strike_dist = np.linalg.norm(p_impact - p_ready)
-            swing_time = strike_dist / (strike_speed * 0.7)
-            swing_time = np.clip(swing_time, 0.05, 0.5)
-
-            # 관절 공간에서의 목표 속도 계산
-            avg_qdot = (q_impact - q_ready) / swing_time
-            if hasattr(self.pb.my_robot, '_qdot_des'):
-                self.pb.my_robot._qdot_des = avg_qdot
-
-            # 임팩트 지점까지만 스윙 (follow-through 없음)
-            # → PD 목표가 임팩트점이므로 공 접촉 후 자연 감속
-            # → headless 자유물체 충돌과 동일한 에너지 전달
-            self.pb.MoveRobot(q_impact, degree=False)
-
-            # 스윙 시간 대기
-            time.sleep(swing_time)
-
-            # === 즉시 후퇴: 수직 상승 → Home ===
-            T_now = T_impact.copy()
-            T_lift = T_now.copy()
-            T_lift[2, 3] += 0.15  # 15cm 수직 상승
-            q_lift = self.ik.solve_step(q_impact, T_lift)
-            self.pb.MoveRobot(q_lift, degree=False)
-            time.sleep(0.8)
-            self.pb.MoveRobot(list(HOME_Q_DEG), degree=True)
-            time.sleep(0.05)
-            q_i = self.get_current_q()
+        # Step 1: 상공 IK → MoveRobot → 수렴 대기
+        idx_above = int(approach_range[1] * 0.6)  # trajectory_planner에서 60% 지점이 상공
+        if q_trajectory is not None and len(q_trajectory) > idx_above:
+            q_above = q_trajectory[idx_above].copy()
         else:
-            # fallback: 단순 임팩트 (strike_speed 미제공)
-            print(f"    [Strike] Simple impact -> retract")
-            T_impact = trajectory[strike_end - 1]
-            q_impact = self.ik.solve_step(q_i, T_impact)
-            self.pb.MoveRobot(q_impact, degree=False)
-            time.sleep(0.1)
-            # 수직 상승 후 Home
-            T_lift = T_impact.copy()
-            T_lift[2, 3] += 0.15  # 15cm 수직 상승
-            q_lift = self.ik.solve_step(q_impact, T_lift)
-            self.pb.MoveRobot(q_lift, degree=False)
-            time.sleep(0.8)
-            self.pb.MoveRobot(list(HOME_Q_DEG), degree=True)
-            time.sleep(0.05)
-            q_i = self.get_current_q()
+            T_above = T_ready.copy()
+            T_above[:3, 3] = above_pos
+            q_above = q_i.copy()
+            for _ in range(50):
+                q_above = self.ik.solve_step(q_above, T_above)
+        
+        self.pb.MoveRobot(q_above, degree=False)
+        for _wait in range(500):
+            time.sleep(0.01)
+            if np.linalg.norm(robot._T_end[:3, 3] - above_pos) < 0.005:
+                break
 
+        # Step 2: Ready IK → MoveRobot → 수렴 대기 (위치 + 방향)
+        idx_ready = approach_range[1] - 1
+        if q_trajectory is not None and len(q_trajectory) > idx_ready:
+            q_ready = q_trajectory[idx_ready].copy()
+        else:
+            q_ready = q_above.copy()
+            for _ in range(50):
+                q_ready = self.ik.solve_step(q_ready, T_ready)
+        self.pb.MoveRobot(q_ready, degree=False)
+        for _wait in range(1000):  # 최대 10초
+            time.sleep(0.01)
+            ee_T = robot._T_end
+            pos_err = np.linalg.norm(ee_T[:3, 3] - ready_pos)
+            z_dot = np.dot(ee_T[:3, 2], ready_z)
+            if pos_err < 0.002 and z_dot > 0.99:
+                break
+        q_i = q_ready
+        ee_err = np.linalg.norm(robot._T_end[:3, 3] - ready_pos)
+        z_align = np.dot(robot._T_end[:3, 2], ready_z)
+        print(f"    [Ready] EE err={ee_err*1000:.1f}mm, z_align={z_align:.4f}")
+
+        # Ready 가드: 오차 크면 strike 포기
+        if ee_err > 0.010:  # 10mm
+            print(f"    [SKIP] Ready err too large ({ee_err*1000:.1f}mm > 10mm), aborting strike")
+            return False
+
+        # === Phase 2: Strike (PD 고게인 Kp=5000 스트리밍) ===
+        # 접촉 추적 리셋 (strike 직전)
+        if env is not None and hasattr(env, 'reset_contact_tracking'):
+            env.reset_contact_tracking()
+        strike_range = phase_indices.get('strike', (0, 0))
+        follow_range = phase_indices.get('follow', (strike_range[1], strike_range[1]))
+        T_follow_end = trajectory[min(follow_range[1] - 1, len(trajectory) - 1)]
+
+        sim_dt = self.pb.dt
+        actual_speed = strike_speed if strike_speed else 1.0
+
+        from project.trajectory_planner import TrajectoryPlanner
+        tp = TrajectoryPlanner()
+        
+        # IK + qdot 사전 계산
+        if q_trajectory is not None and len(q_trajectory) >= follow_range[1]:
+            q_traj = q_trajectory[strike_range[0]:follow_range[1]]
+            print(f"    [Strike] {len(q_traj)} pts (validated)")
+        else:
+            full_traj = tp.plan_constant_speed_linear(
+                T_ready, T_follow_end, actual_speed, sim_dt)
+            print(f"    [Strike] {len(full_traj)} pts @ {actual_speed:.2f} m/s")
+            q_prev = q_ready.copy()
+            q_traj = []
+            for T in full_traj:
+                q_prev = self.ik.solve_step(q_prev, T)
+                q_traj.append(q_prev.copy())
+
+        qdot_traj = []
+        for k in range(len(q_traj)):
+            if k < len(q_traj) - 1:
+                qdot_traj.append((q_traj[k + 1] - q_traj[k]) / sim_dt)
+            else:
+                qdot_traj.append(np.zeros_like(q_traj[0]))
+
+        # PD 게인 극대화 (strike 중) — _compute_torque_input을 직접 교체
+        original_torque_fn = robot._compute_torque_input
+
+        def _strike_torque_input():
+            KP_STRIKE, KD_STRIKE = 5000, 200
+            qddot = robot._qddot_des + \
+                     KP_STRIKE * (robot._q_des - robot._q) + \
+                     KD_STRIKE * (robot._qdot_des - robot._qdot)
+            robot._tau = robot._M @ qddot + robot._c + robot._g
+
+        robot._compute_torque_input = _strike_torque_input
+
+        # 궤적 버퍼 + 접촉 상태
+        robot._strike_buf = list(zip(q_traj, qdot_traj))
+        robot._strike_idx = 0
+        robot._contact_step = -1
+        robot._collision_off = False
+
+        original_thread_pre = self.pb._thread_pre
+
+        def _streaming_thread_pre():
+            original_thread_pre()
+            if not hasattr(robot, '_strike_buf'):
+                return
+            # 궤적 스트리밍
+            if robot._strike_idx < len(robot._strike_buf):
+                q_des, qdot_des = robot._strike_buf[robot._strike_idx]
+                robot._q_des = q_des
+                robot._qdot_des = qdot_des
+                robot._strike_idx += 1
+            # 도구-큐볼 접촉 감지 + 10-step 후 충돌 해제
+            if env is not None and not robot._collision_off:
+                if robot._contact_step < 0:
+                    contacts = _p.getContactPoints(
+                        bodyA=env.tool_id, bodyB=env.cue_ball_id,
+                        physicsClientId=client)
+                    if len(contacts) > 0:
+                        robot._contact_step = robot._strike_idx
+                elif robot._strike_idx - robot._contact_step >= 10:
+                    _p.setCollisionFilterPair(
+                        env.tool_id, env.cue_ball_id, -1, -1, 0,
+                        physicsClientId=client)
+                    robot._collision_off = True
+            # 큐볼-목표공 접촉 추적
+            if env is not None:
+                ball_contacts = _p.getContactPoints(
+                    bodyA=env.cue_ball_id, physicsClientId=client)
+                for bc in ball_contacts:
+                    if bc[2] == env.target_ball_id:
+                        env._contact_hit_t1 = True
+                    elif bc[2] == env.ball2_id:
+                        env._contact_hit_t2 = True
+
+        self.pb._thread_pre = _streaming_thread_pre
+
+        # 버퍼 소진 대기
+        t0 = time.time()
+        timeout = len(q_traj) * sim_dt * 10
+        while robot._strike_idx < len(robot._strike_buf):
+            if time.time() - t0 > timeout:
+                break
+            time.sleep(0.005)
+
+        # 진단 로그
+        if env is not None:
+            cue_vel, _ = _p.getBaseVelocity(env.cue_ball_id, physicsClientId=client)
+            cue_speed = np.linalg.norm(cue_vel[:2])
+            contact_at = getattr(robot, '_contact_step', -1)
+            print(f"    [DIAG] Contact at step {contact_at}/{len(q_traj)}")
+            print(f"    [DIAG] Ball vel: [{cue_vel[0]:.3f}, {cue_vel[1]:.3f}] speed={cue_speed:.3f}")
+
+        # strike 콜백 제거 + PD 복원
+        robot._compute_torque_input = original_torque_fn
+        for attr in ['_strike_buf', '_strike_idx',
+                      '_contact_step', '_collision_off']:
+            if hasattr(robot, attr):
+                delattr(robot, attr)
+        robot._qdot_des = np.zeros([robot.numJoints, 1])
+
+        # 접촉 추적 전용 콜백 설치 (240Hz로 공 구름 중 접촉 감지)
+        # 쿠션 + 적구 접촉 순서 기록 (3쿠션 규칙 검증용)
+        if env is not None and not hasattr(env, '_contact_events'):
+            env._contact_events = []
+            env._contact_cushion_set = set()
+            env._contact_cushion_count = 0
+
+        def _contact_tracking_pre():
+            original_thread_pre()
+            if env is not None:
+                try:
+                    ball_contacts = _p.getContactPoints(
+                        bodyA=env.cue_ball_id, physicsClientId=client)
+                    cur_cushion = set()
+                    for bc in ball_contacts:
+                        if bc[2] == env.target_ball_id and not getattr(env, '_contact_hit_t1', False):
+                            env._contact_hit_t1 = True
+                            env._contact_events.append('t1')
+                        elif bc[2] == getattr(env, 'ball2_id', -1) and not getattr(env, '_contact_hit_t2', False):
+                            env._contact_hit_t2 = True
+                            env._contact_events.append('t2')
+                        elif hasattr(env, 'cushion_ids') and bc[2] in env.cushion_ids:
+                            cur_cushion.add(bc[2])
+                    # 새로운 쿠션 접촉만 기록
+                    new_cushions = cur_cushion - env._contact_cushion_set
+                    for _ in new_cushions:
+                        env._contact_cushion_count += 1
+                        env._contact_events.append('c')
+                    env._contact_cushion_set = cur_cushion
+                except Exception:
+                    pass  # disconnect 후 호출 시 무시
+
+        self.pb._thread_pre = _contact_tracking_pre
+
+        print(f"    [DIAG] Hit t1={getattr(env, '_contact_hit_t1', False)}, "
+              f"t2={getattr(env, '_contact_hit_t2', False)}")
+
+        # Home 복귀
+        self.pb.MoveRobot(list(HOME_Q_DEG), degree=True)
+        time.sleep(1.5)
+        q_i = self.get_current_q()
         self._q_current = q_i.copy()
 
     def _execute_real(self, trajectory, dt, phase_indices=None, **kwargs):
@@ -427,3 +575,36 @@ class RobotController:
     def destroy_debug_frames(self):
         if self.pb is not None:
             self.pb.destroy_debug_frames()
+
+    def _disable_tool_cue_collision(self):
+        """임팩트 후 도구↔큐볼 충돌 비활성화
+
+        Headless planner에서는 충돌 10스텝 후 도구를 [0,0,-10]으로 순간이동시킴.
+        GUI에서는 로봇이 임팩트 지점에서 상승하는 동안 도구가 공을 밀어냄.
+        → 충돌을 비활성화하여 동일한 효과 달성.
+        """
+        if self._env is None or self.pb is None:
+            return
+        env = self._env
+        import pybullet as _p
+        client = self.pb.ClientId
+
+        tool_id = getattr(env, 'tool_id', None)
+        cue_id = getattr(env, 'cue_ball_id', None)
+        if tool_id is not None and cue_id is not None:
+            _p.setCollisionFilterPair(tool_id, cue_id, -1, -1,
+                                      enableCollision=0, physicsClientId=client)
+
+    def _reenable_tool_cue_collision(self):
+        """다음 타격을 위해 도구↔큐볼 충돌 재활성화"""
+        if self._env is None or self.pb is None:
+            return
+        env = self._env
+        import pybullet as _p
+        client = self.pb.ClientId
+
+        tool_id = getattr(env, 'tool_id', None)
+        cue_id = getattr(env, 'cue_ball_id', None)
+        if tool_id is not None and cue_id is not None:
+            _p.setCollisionFilterPair(tool_id, cue_id, -1, -1,
+                                      enableCollision=1, physicsClientId=client)

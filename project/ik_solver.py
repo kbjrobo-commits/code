@@ -25,6 +25,10 @@ class IKSolver:
         - 궤적 사전검증 (실행 전 전체 IK 풀이 + 검증)
     """
 
+    # Indy7 URDF 관절 한계 (rad)
+    INDY7_Q_LOWER = np.array([-3.054, -3.054, -3.054, -3.054, -3.054, -3.752]).reshape(-1, 1)
+    INDY7_Q_UPPER = np.array([ 3.054,  3.054,  3.054,  3.054,  3.054,  3.752]).reshape(-1, 1)
+
     def __init__(self, pinocchio_model, gain=1.0, damping=1e-3,
                  q_lower=None, q_upper=None):
         """
@@ -32,14 +36,14 @@ class IKSolver:
             pinocchio_model: PinocchioModel 인스턴스
             gain: IK 스텝 크기 (0~1)
             damping: DLS 기본 감쇠 계수
-            q_lower: 관절 하한 (n,1) ndarray — None이면 검증 생략
-            q_upper: 관절 상한 (n,1) ndarray — None이면 검증 생략
+            q_lower: 관절 하한 (n,1) ndarray — None이면 Indy7 기본값 사용
+            q_upper: 관절 상한 (n,1) ndarray — None이면 Indy7 기본값 사용
         """
         self.pin = pinocchio_model
         self.gain = gain
         self.damping = damping
-        self.q_lower = q_lower
-        self.q_upper = q_upper
+        self.q_lower = q_lower if q_lower is not None else self.INDY7_Q_LOWER
+        self.q_upper = q_upper if q_upper is not None else self.INDY7_Q_UPPER
         # 적응형 damping 파라미터
         self._w_thresh = 0.005   # manipulability 임계치
         self._damping_max = 0.05 # 특이점 근방 최대 damping
@@ -121,6 +125,9 @@ class IKSolver:
         # Damped Least Squares
         JJT = Jv @ Jv.T + lam * np.eye(6)
         q_new = q + self.gain * Jv.T @ np.linalg.solve(JJT, p_err)
+
+        # 관절 한계 클램핑
+        q_new = np.clip(q_new, self.q_lower, self.q_upper)
         return q_new
 
     # ── solve_to_target: 현재 미사용, 향후 사전검증 파이프라인에서 활용 예정 ──
@@ -196,9 +203,10 @@ class IKSolver:
             # 1. Manipulability 검사
             w = self.manipulability(q_i)
             manipulability_list.append(w)
-            if w < w_threshold:
+            # 특이점 기준 강화 (0.005 -> 0.015)
+            if w < max(w_threshold, 0.015):
                 issues.append(
-                    f"[pt {idx}] 특이점 근접: manipulability={w:.6f} < {w_threshold}")
+                    f"[pt {idx}] 특이점 근접: manipulability={w:.6f} < {max(w_threshold, 0.015)}")
 
             # 2. 관절 한계 검사
             valid, viols = self.check_joint_limits(q_i)
@@ -206,6 +214,17 @@ class IKSolver:
                 joint_violations.append((idx, viols))
                 issues.append(
                     f"[pt {idx}] 관절 한계 초과: joints {viols}")
+
+            # 3. 바디 뚫림 (Body Penetration) 검사
+            import pinocchio as pin
+            pin.forwardKinematics(self.pin.pinModel, self.pin.pinData, q_i)
+            # J3(Elbow) ~ J6(Wrist)가 테이블 위로 갈 때 바닥을 뚫지 않도록 (테이블 z=0.322)
+            for j_id in range(3, self.pin.pinModel.njoints):
+                pos = self.pin.pinData.oMi[j_id].translation
+                # y > 0.0 (테이블 쪽) 이고 z < 0.30 (테이블 표면 근처/아래) 이면 뚫림으로 간주
+                if pos[1] > 0.05 and pos[2] < 0.30:
+                    issues.append(f"[pt {idx}] 바디 뚫림: joint {j_id} at z={pos[2]:.3f} < 0.30m")
+                    break
 
             # 3. 급격한 관절 점프 검사
             dq = np.max(np.abs(q_i - q_prev))

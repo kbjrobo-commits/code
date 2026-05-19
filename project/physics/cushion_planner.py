@@ -1,175 +1,305 @@
 """
-3쿠션 타격 탐색기 — Headless PyBullet 3D 시뮬레이션
-====================================================
-미니골프 Grid Search와 동일한 방식:
-  별도 headless PyBullet에 동일한 테이블/쿠션/장애물/3공을 구성하고,
-  큐볼에 수평 초기 속도를 부여하여 직접 굴려본다.
-  → PyBullet이 계획에도 실행에도 쓰이므로 모델 gap이 0.
-
-쓰리쿠션 판정:
-  - 큐볼이 두 목표공 모두 접촉
-  - 쿠션 반사 3회 이상
+3쿠션 타격 탐색기 — Headless PyBullet 로봇 시뮬레이션
+=====================================================
+Headless PyBullet에 동일한 로봇+도구+테이블/쿠션/3공을 구성.
+PD computed torque (Kp=5000) 스트리밍으로 도구가 큐볼을 물리적으로 타격.
+GUI _execute_sim과 동일한 물리 → 모델 gap 0.
 """
 import numpy as np
 import pybullet as p
-import sys
-import os
+import sys, os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-
 from project.config import *
 
 
-def ball_speed_to_ee_speed(v_ball, m_tool=TOOL_HEAD_MASS,
-                           m_ball=MAZE_BALL_MASS,
-                           e_tool=TOOL_HEAD_RESTITUTION,
-                           e_ball=MAZE_BALL_RESTITUTION):
-    """운동량 보존으로 필요한 EE 속도 역산 (대각선 타격 보정 포함)"""
-    e = np.sqrt(e_tool * e_ball)
-    ratio = (1 + e) * m_tool / (m_tool + m_ball)
-    if ratio < 1e-6:
-        return v_ball
-    ee_speed = v_ball / ratio
-    cos_angle = np.cos(np.radians(MAZE_STRIKE_ANGLE_DEG))
-    if cos_angle > 1e-6:
-        ee_speed = ee_speed / cos_angle
-    return ee_speed
-
-
 class CushionShotPlanner:
-    """Headless PyBullet 3D 시뮬레이션 기반 쓰리쿠션 타격 탐색"""
+    """Headless 로봇 시뮬 기반 쓰리쿠션 타격 탐색"""
 
     def __init__(self, table_bounds, ball_radius=MAZE_BALL_RADIUS):
         self.bounds = table_bounds
         self.ball_r = ball_radius
 
-    def plan_shot(self, cue_pos, target_pos, obstacles,
-                  ball2_pos=None):
-        """어닐링 탐색: headless PyBullet에서 직접 3공을 굴려보고 최적 타격 선택
-
-        Returns:
-            candidates: list of dicts (상위 다양 후보들)
-        """
+    def plan_shot(self, cue_pos, target_pos, obstacles, ball2_pos=None):
+        """2단계 탐색: (1) 공 직접 속도 부여로 빠른 탐색 (2) 상위 후보만 로봇 PD 검증"""
         cue_3d = np.array(cue_pos).flatten()
         tgt1_3d = np.array(target_pos).flatten()
         tgt2_3d = np.array(ball2_pos).flatten() if ball2_pos is not None else None
 
-        # === Headless PyBullet 환경 구성 ===
-        sim = self._create_headless_env(cue_3d, tgt1_3d, tgt2_3d, obstacles)
-        sim_id, cue_id, tgt1_id, tgt2_id, cushion_ids, obstacle_ids, tool_id = sim
+        # === Stage 1: 공 직접 속도 부여 (로봇 없음, ~100x 빠름) ===
+        fast_results = self._fast_ball_search(cue_3d, tgt1_3d, tgt2_3d, obstacles)
+        n_valid = sum(1 for r in fast_results if r['score'] >= 3000)
+        best_fast = max(fast_results, key=lambda r: r['score'])
+        print(f"  [Fast] {len(fast_results)} tested, {n_valid} valid 3-cushion, "
+              f"best={best_fast['score']:.0f}")
 
-        # === 어닐링 탐색 (EE 속도 직접 탐색) ===
+        # === Stage 2: 3쿠션 유효 후보 우선 + 도달가능성 필터 ===
+        fast_results.sort(key=lambda r: r['score'], reverse=True)
+        SAFE_RADIUS = 0.65
+        tilt_rad = np.radians(MAZE_STRIKE_ANGLE_DEG)
+
+        def _filter_reachable_diverse(candidates, max_n=10):
+            """도달가능 + 각도 다양성 필터"""
+            result = []
+            for r in candidates:
+                angle = r['angle']
+                strike_dir = np.array([
+                    np.cos(angle) * np.cos(tilt_rad),
+                    np.sin(angle) * np.cos(tilt_rad),
+                    -np.sin(tilt_rad)
+                ])
+                ready_pos = cue_3d - strike_dir * (TOOL_HEAD_LENGTH + STRIKE_APPROACH_DIST)
+                if np.linalg.norm(ready_pos[:2]) > SAFE_RADIUS:
+                    continue
+                angle_deg = np.degrees(angle) % 360
+                too_close = any(
+                    min(abs(angle_deg - np.degrees(e['angle']) % 360),
+                        360 - abs(angle_deg - np.degrees(e['angle']) % 360)) < 15
+                    for e in result)
+                if not too_close:
+                    result.append(r)
+                if len(result) >= max_n:
+                    break
+            return result
+
+        # 3쿠션 유효 후보 우선
+        valid_3c = [r for r in fast_results if r['score'] >= 3000]
+        top_fast = _filter_reachable_diverse(valid_3c, max_n=10)
+        if not top_fast:
+            # 유효 후보 없으면 전체에서 선택 (fallback)
+            top_fast = _filter_reachable_diverse(fast_results, max_n=10)
+        if not top_fast:
+            top_fast = [fast_results[0]]
+        print(f"  [Filter] {len(valid_3c)} valid → {len(top_fast)} reachable diverse")
+
+        # 로봇 환경 생성 + 상위 후보만 검증
+        env = self._create_robot_env(cue_3d, tgt1_3d, tgt2_3d, obstacles)
+        (sim_id, cue_id, tgt1_id, tgt2_id, cushion_ids, obstacle_ids,
+         tool_id, robot_id, movable_joints, ee_link, tool_cid,
+         ik_solver, pin_model) = env
+
+        candidates = []
+        for r in top_fast:
+            score, info = self._simulate_one(
+                sim_id, cue_id, tgt1_id, tgt2_id, cushion_ids, tool_id,
+                robot_id, movable_joints, ik_solver, pin_model,
+                cue_3d, tgt1_3d, tgt2_3d, r['angle'], r['speed'])
+            strike_dir = np.array([np.cos(r['angle']), np.sin(r['angle'])])
+            ee_speed = min(r['speed'], MAX_TOOL_SPEED)
+            candidates.append({
+                'strike_dir': strike_dir,
+                'strike_speed': ee_speed,
+                'ball_speed': ee_speed,
+                'ball_path': info.get('cue_path'),
+                'tgt1_path': info.get('tgt1_path'),
+                'tgt2_path': info.get('tgt2_path'),
+                'cushion_count': info.get('cushion_count', 0),
+                'hit_t1': info.get('hit_t1', False),
+                'hit_t2': info.get('hit_t2', False),
+                'score': score,
+                'angle_deg': np.degrees(r['angle']),
+            })
+
+        p.disconnect(sim_id)
+
+        candidates.sort(key=lambda c: c['score'], reverse=True)
+        print(f"  Found {len(candidates)} diverse candidates")
+        if candidates:
+            top = candidates[0]
+            print(f"  Top: angle={top['angle_deg']:.1f}deg, "
+                  f"cushions={top['cushion_count']}, "
+                  f"hit_t1={top['hit_t1']}, hit_t2={top['hit_t2']}, "
+                  f"score={top['score']}")
+        return candidates
+
+    # ================================================================
+    # Stage 1: 빠른 공 직접 시뮬 (로봇 없음)
+    # ================================================================
+
+    def _fast_ball_search(self, cue_pos, tgt1_pos, tgt2_pos, obstacles):
+        """공에 직접 속도를 부여하여 빠르게 탐색 (로봇/IK/PD 없음)"""
+        sim = p.connect(p.DIRECT)
+        p.setGravity(0, 0, -9.81, physicsClientId=sim)
+        p.setTimeStep(1./240, physicsClientId=sim)
+
+        L, W = MAZE_TABLE_LENGTH, MAZE_TABLE_WIDTH
+        TH, H = MAZE_TABLE_HEIGHT, MAZE_TABLE_SURFACE_HEIGHT
+        CX, CY = MAZE_TABLE_CENTER_X, MAZE_TABLE_CENTER_Y
+        center = [CX, CY, H]
+
+        import pybullet_data
+        p.setAdditionalSearchPath(pybullet_data.getDataPath())
+        p.loadURDF("plane.urdf", physicsClientId=sim)
+
+        # 테이블
+        col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[L/2, W/2, TH/2],
+                                     physicsClientId=sim)
+        table_id = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=col,
+                                     basePosition=center, physicsClientId=sim)
+        p.changeDynamics(table_id, -1, lateralFriction=MAZE_BALL_FRICTION,
+                         restitution=0.5, physicsClientId=sim)
+
+        # 쿠션
+        CH = MAZE_CUSHION_HEIGHT
+        top_z = center[2] + TH / 2 + CH / 2
+        thickness = 0.04
+        configs = [
+            ([center[0], center[1]+W/2+thickness/2, top_z], [L/2, thickness/2, CH/2]),
+            ([center[0], center[1]-W/2-thickness/2, top_z], [L/2, thickness/2, CH/2]),
+            ([center[0]-L/2-thickness/2, center[1], top_z], [thickness/2, W/2, CH/2]),
+            ([center[0]+L/2+thickness/2, center[1], top_z], [thickness/2, W/2, CH/2]),
+        ]
+        cushion_ids = []
+        for pos, half_ext in configs:
+            col = p.createCollisionShape(p.GEOM_BOX, halfExtents=half_ext,
+                                         physicsClientId=sim)
+            cid = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=col,
+                                    basePosition=pos, physicsClientId=sim)
+            p.changeDynamics(cid, -1, restitution=MAZE_CUSHION_RESTITUTION,
+                             physicsClientId=sim)
+            cushion_ids.append(cid)
+
+        # 공
+        def make_ball(pos):
+            col = p.createCollisionShape(p.GEOM_SPHERE, radius=MAZE_BALL_RADIUS,
+                                         physicsClientId=sim)
+            bid = p.createMultiBody(baseMass=MAZE_BALL_MASS,
+                                    baseCollisionShapeIndex=col,
+                                    basePosition=list(pos), physicsClientId=sim)
+            p.changeDynamics(bid, -1,
+                             lateralFriction=MAZE_BALL_FRICTION,
+                             restitution=MAZE_BALL_RESTITUTION,
+                             rollingFriction=MAZE_BALL_ROLLING_FRICTION,
+                             spinningFriction=0.02,
+                             contactProcessingThreshold=0,
+                             physicsClientId=sim)
+            return bid
+
+        cue_id = make_ball(cue_pos)
+        tgt1_id = make_ball(tgt1_pos)
+        tgt2_id = make_ball(tgt2_pos) if tgt2_pos is not None else None
+
+        # 안정화
+        for _ in range(50):
+            p.stepSimulation(physicsClientId=sim)
+
+        # 탐색: 어닐링
         n_initial = ANNEAL_N_INITIAL
         speed_lo, speed_hi = ANNEAL_SPEED_RANGE
-
-        # Phase 1: 광역 샘플링
         angles = np.random.uniform(0, 2 * np.pi, n_initial)
         speeds = np.random.uniform(speed_lo, speed_hi, n_initial)
 
         results = []
         for i in range(n_initial):
-            score, info = self._simulate_one(
-                sim_id, cue_id, tgt1_id, tgt2_id, cushion_ids, tool_id,
-                cue_3d, tgt1_3d, tgt2_3d,
-                angles[i], speeds[i]
-            )
-            results.append({
-                'angle': angles[i], 'speed': speeds[i],
-                'score': score, **info
-            })
+            score, info = self._simulate_ball_only(
+                sim, cue_id, tgt1_id, tgt2_id, cushion_ids,
+                cue_pos, tgt1_pos, tgt2_pos, angles[i], speeds[i])
+            results.append({'angle': angles[i], 'speed': speeds[i],
+                            'score': score, **info})
 
-        # Phase 2: 정밀화 라운드
         for rnd in range(ANNEAL_N_REFINE_ROUNDS):
             results.sort(key=lambda r: r['score'], reverse=True)
             n_top = max(int(len(results) * ANNEAL_TOP_RATIO), 5)
             top = results[:n_top]
-
             sigma_a = np.radians(ANNEAL_SIGMA_ANGLE[rnd])
             sigma_s = ANNEAL_SIGMA_SPEED[rnd]
-
-            new_angles = []
-            new_speeds = []
             for t in top:
                 for _ in range(n_initial // n_top):
                     a = t['angle'] + np.random.normal(0, sigma_a)
                     s = np.clip(t['speed'] + np.random.normal(0, sigma_s),
                                 speed_lo, speed_hi)
-                    new_angles.append(a)
-                    new_speeds.append(s)
+                    score, info = self._simulate_ball_only(
+                        sim, cue_id, tgt1_id, tgt2_id, cushion_ids,
+                        cue_pos, tgt1_pos, tgt2_pos, a, s)
+                    results.append({'angle': a, 'speed': s,
+                                    'score': score, **info})
 
-            for i in range(len(new_angles)):
-                score, info = self._simulate_one(
-                    sim_id, cue_id, tgt1_id, tgt2_id, cushion_ids, tool_id,
-                    cue_3d, tgt1_3d, tgt2_3d,
-                    new_angles[i], new_speeds[i]
-                )
-                results.append({
-                    'angle': new_angles[i], 'speed': new_speeds[i],
-                    'score': score, **info
-                })
+        p.disconnect(sim)
+        return results
 
-        p.disconnect(sim_id)
+    def _simulate_ball_only(self, sim_id, cue_id, tgt1_id, tgt2_id, cushion_ids,
+                            cue_start, tgt1_start, tgt2_start, angle, speed,
+                            max_steps=2000):
+        """공에 직접 속도를 부여하고 구름 시뮬 (로봇 없음)"""
+        # 리셋
+        for bid, pos in [(cue_id, cue_start), (tgt1_id, tgt1_start)]:
+            p.resetBasePositionAndOrientation(bid, list(pos), [0,0,0,1],
+                                              physicsClientId=sim_id)
+            p.resetBaseVelocity(bid, [0,0,0], [0,0,0], physicsClientId=sim_id)
+        if tgt2_id is not None and tgt2_start is not None:
+            p.resetBasePositionAndOrientation(tgt2_id, list(tgt2_start), [0,0,0,1],
+                                              physicsClientId=sim_id)
+            p.resetBaseVelocity(tgt2_id, [0,0,0], [0,0,0], physicsClientId=sim_id)
 
-        # === 상위 다양 후보 선택 ===
-        results.sort(key=lambda r: r['score'], reverse=True)
+        # 하향 타격(20도)에 의한 바닥 반발 마찰 손실 반영 (속도 15% 감소)
+        tilt_penalty = 0.85 if MAZE_STRIKE_ANGLE_DEG > 0 else 1.0
+        effective_speed = speed * tilt_penalty
+        vx = effective_speed * np.cos(angle)
+        vy = effective_speed * np.sin(angle)
+        p.resetBaseVelocity(cue_id, [vx, vy, 0], [0, 0, 0], physicsClientId=sim_id)
 
-        top_candidates = []
-        for r in results:
-            angle_deg = np.degrees(r['angle']) % 360
-            too_close = False
-            for existing in top_candidates:
-                existing_deg = np.degrees(existing['angle']) % 360
-                diff = abs(angle_deg - existing_deg)
-                if diff > 180:
-                    diff = 360 - diff
-                if diff < 15:
-                    too_close = True
+        # 시뮬 + 접촉 추적 (순서 기록)
+        hit_t1, hit_t2, cushion_contacts = False, False, 0
+        events = []  # 접촉 이벤트 순서: 'c'=cushion, 't1'=target1, 't2'=target2
+        cue_path = [[cue_start[0], cue_start[1]]]
+        prev_cushion = set()
+
+        for step in range(max_steps):
+            p.stepSimulation(physicsClientId=sim_id)
+
+            contacts = p.getContactPoints(bodyA=cue_id, physicsClientId=sim_id)
+            cur_cushion = set()
+            for c in contacts:
+                if c[2] == tgt1_id and not hit_t1:
+                    hit_t1 = True
+                    events.append('t1')
+                elif c[2] == tgt2_id and not hit_t2:
+                    hit_t2 = True
+                    events.append('t2')
+                elif c[2] in cushion_ids:
+                    cur_cushion.add(c[2])
+            new_cushions = cur_cushion - prev_cushion
+            for _ in new_cushions:
+                cushion_contacts += 1
+                events.append('c')
+            prev_cushion = cur_cushion
+
+            if step % 20 == 0:
+                pos, _ = p.getBasePositionAndOrientation(cue_id, physicsClientId=sim_id)
+                cue_path.append([pos[0], pos[1]])
+
+            if step > 200 and step % 50 == 0:
+                speeds_check = [np.linalg.norm(p.getBaseVelocity(bid, physicsClientId=sim_id)[0][:2])
+                          for bid in [cue_id, tgt1_id] + ([tgt2_id] if tgt2_id else [])]
+                if all(s < 0.005 for s in speeds_check):
                     break
-            if not too_close:
-                top_candidates.append(r)
-            if len(top_candidates) >= 10:
-                break
 
-        if not top_candidates:
-            top_candidates = [results[0]]
-
-        # dict 변환 — speed는 이미 EE 속도 (도구 물리 타격으로 시뮬)
-        candidates = []
-        for r in top_candidates:
-            strike_dir_2d = np.array([np.cos(r['angle']), np.sin(r['angle'])])
-            ee_speed = min(r['speed'], MAX_TOOL_SPEED)
-            candidates.append({
-                'strike_dir': strike_dir_2d,
-                'strike_speed': ee_speed,
-                'ball_speed': ee_speed,  # 레거시 호환
-                'ball_path': r.get('cue_path'),
-                'tgt1_path': r.get('tgt1_path'),
-                'tgt2_path': r.get('tgt2_path'),
-                'cushion_count': r.get('cushion_count', 0),
-                'hit_t1': r.get('hit_t1', False),
-                'hit_t2': r.get('hit_t2', False),
-                'score': r['score'],
-                'angle_deg': np.degrees(r['angle']),
-            })
-
-        return candidates
+        score = self._score_result(cue_id, tgt1_id, tgt2_id, sim_id,
+                                   cue_start, tgt1_start, tgt2_start,
+                                   hit_t1, hit_t2, cushion_contacts, cue_path,
+                                   events)
+        return score, {'hit_t1': hit_t1, 'hit_t2': hit_t2,
+                       'cushion_count': cushion_contacts, 'events': events}
 
     # ================================================================
-    # Headless PyBullet 환경 구성
+    # 환경 생성
     # ================================================================
 
-    def _create_headless_env(self, cue_pos, tgt1_pos, tgt2_pos, obstacles):
-        """GUI 환경과 동일한 테이블/쿠션/공/장애물을 headless로 구성"""
+    def _create_robot_env(self, cue_pos, tgt1_pos, tgt2_pos, obstacles):
+        """GUI와 동일한 로봇+도구+테이블 환경을 headless로 구성"""
         sim = p.connect(p.DIRECT)
         p.setGravity(0, 0, -9.81, physicsClientId=sim)
         p.setTimeStep(1./240, physicsClientId=sim)
 
-        L = MAZE_TABLE_LENGTH
-        W = MAZE_TABLE_WIDTH
-        TH = MAZE_TABLE_HEIGHT
-        H = MAZE_TABLE_SURFACE_HEIGHT
-        CY = MAZE_TABLE_CENTER_Y
-        center = [0.5, CY, H]
+        L, W = MAZE_TABLE_LENGTH, MAZE_TABLE_WIDTH
+        TH, H = MAZE_TABLE_HEIGHT, MAZE_TABLE_SURFACE_HEIGHT
+        CX, CY = MAZE_TABLE_CENTER_X, MAZE_TABLE_CENTER_Y
+        center = [CX, CY, H]
+
+        # 바닥
+        import pybullet_data
+        p.setAdditionalSearchPath(pybullet_data.getDataPath())
+        p.loadURDF("plane.urdf", physicsClientId=sim)
 
         # 테이블
         col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[L/2, W/2, TH/2],
@@ -205,8 +335,7 @@ class CushionShotPlanner:
                                          physicsClientId=sim)
             bid = p.createMultiBody(baseMass=MAZE_BALL_MASS,
                                     baseCollisionShapeIndex=col,
-                                    basePosition=list(pos),
-                                    physicsClientId=sim)
+                                    basePosition=list(pos), physicsClientId=sim)
             p.changeDynamics(bid, -1,
                              lateralFriction=MAZE_BALL_FRICTION,
                              restitution=MAZE_BALL_RESTITUTION,
@@ -223,203 +352,337 @@ class CushionShotPlanner:
 
         # 장애물
         obstacle_ids = []
-        r_obs = MAZE_OBSTACLE_RADIUS
-        h_obs = MAZE_OBSTACLE_HEIGHT
+        r_obs, h_obs = MAZE_OBSTACLE_RADIUS, MAZE_OBSTACLE_HEIGHT
         z_obs = center[2] + TH / 2 + h_obs / 2
         for (ox, oy, _) in obstacles:
             col = p.createCollisionShape(p.GEOM_CYLINDER, radius=r_obs,
                                          height=h_obs, physicsClientId=sim)
             oid = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=col,
-                                    basePosition=[ox, oy, z_obs],
-                                    physicsClientId=sim)
+                                    basePosition=[ox, oy, z_obs], physicsClientId=sim)
             p.changeDynamics(oid, -1, restitution=0.5, lateralFriction=0.3,
                              physicsClientId=sim)
             obstacle_ids.append(oid)
 
-        # 가상 도구 — GUI 실행과 동일한 질량/반발계수
-        # GUI에서도 임팩트 지점에서 정지하므로 유효질량 ≈ 도구 질량
-        tool_col = p.createCollisionShape(p.GEOM_SPHERE, radius=TOOL_HEAD_RADIUS,
-                                          physicsClientId=sim)
+        # 로봇
+        import os as _os
+        urdf_base = _os.path.join(_os.path.dirname(__file__), '..', '..',
+                                   'src', 'assets', 'urdf', 'indy7_v2', 'indy7_v2')
+        urdf_base = _os.path.abspath(urdf_base)
+        try:
+            urdf_base.encode('ascii')
+            safe_dir = urdf_base
+        except UnicodeEncodeError:
+            import shutil
+            safe_dir = "C:\\tmp_urdf\\indy7_v2\\indy7_v2"
+            if not _os.path.exists(safe_dir):
+                shutil.copytree(urdf_base, safe_dir)
+
+        robot_id = p.loadURDF(
+            safe_dir + "/model.urdf", basePosition=[0, 0, 0],
+            baseOrientation=[0, 0, 0, 1],
+            flags=p.URDF_USE_INERTIA_FROM_FILE, physicsClientId=sim)
+
+        movable_joints = [0, 1, 2, 3, 4, 5]
+        home_q = np.array(HOME_Q_RAD).flatten()
+        for i, jidx in enumerate(movable_joints):
+            p.resetJointState(robot_id, jidx, home_q[i], 0, physicsClientId=sim)
+            p.setJointMotorControl2(robot_id, jidx, p.VELOCITY_CONTROL,
+                                    force=0, physicsClientId=sim)
+        ee_link = 6
+
+        # 도구 + constraint
+        tool_col = p.createCollisionShape(p.GEOM_CYLINDER, radius=TOOL_HEAD_RADIUS,
+                                          height=TOOL_HEAD_LENGTH, physicsClientId=sim)
         tool_id = p.createMultiBody(baseMass=TOOL_HEAD_MASS,
                                     baseCollisionShapeIndex=tool_col,
-                                    basePosition=[0, 0, -1],
-                                    physicsClientId=sim)
+                                    basePosition=[0, 0, 0], physicsClientId=sim)
         p.changeDynamics(tool_id, -1, restitution=TOOL_HEAD_RESTITUTION,
                          lateralFriction=0.3, physicsClientId=sim)
+        tool_cid = p.createConstraint(
+            robot_id, ee_link, tool_id, -1,
+            jointType=p.JOINT_FIXED, jointAxis=[0, 0, 0],
+            parentFramePosition=[0, 0, TOOL_HEAD_LENGTH / 2],
+            childFramePosition=[0, 0, 0], physicsClientId=sim)
+        p.changeConstraint(tool_cid, maxForce=TOOL_CONSTRAINT_FORCE,
+                           physicsClientId=sim)
 
-        # 도구↔큐볼만 충돌, 나머지 전부 비활성
+        # 충돌 필터: 로봇-환경 비활성, 도구↔큐볼만 활성
+        num_links = p.getNumJoints(robot_id, physicsClientId=sim)
+        for link_idx in range(-1, num_links):
+            p.setCollisionFilterPair(robot_id, table_id, link_idx, -1, 0,
+                                     physicsClientId=sim)
+            for c in cushion_ids:
+                p.setCollisionFilterPair(robot_id, c, link_idx, -1, 0,
+                                         physicsClientId=sim)
+            for o in obstacle_ids:
+                p.setCollisionFilterPair(robot_id, o, link_idx, -1, 0,
+                                         physicsClientId=sim)
         p.setCollisionFilterPair(tool_id, table_id, -1, -1, 0, physicsClientId=sim)
-        for cid_c in cushion_ids:
-            p.setCollisionFilterPair(tool_id, cid_c, -1, -1, 0, physicsClientId=sim)
-        for oid_c in obstacle_ids:
-            p.setCollisionFilterPair(tool_id, oid_c, -1, -1, 0, physicsClientId=sim)
+        for c in cushion_ids:
+            p.setCollisionFilterPair(tool_id, c, -1, -1, 0, physicsClientId=sim)
+        for o in obstacle_ids:
+            p.setCollisionFilterPair(tool_id, o, -1, -1, 0, physicsClientId=sim)
         p.setCollisionFilterPair(tool_id, tgt1_id, -1, -1, 0, physicsClientId=sim)
         if tgt2_id is not None:
             p.setCollisionFilterPair(tool_id, tgt2_id, -1, -1, 0, physicsClientId=sim)
 
-        return sim, cue_id, tgt1_id, tgt2_id, cushion_ids, obstacle_ids, tool_id
+        # IK solver
+        from src.utils.pinocchio_utils import PinocchioModel
+        from project.ik_solver import IKSolver
+        pin_model = PinocchioModel(_os.path.join(
+            _os.path.dirname(__file__), '..', '..', 'src', 'assets', 'urdf',
+            'indy7_v2', 'indy7_v2'))
+        ik_solver = IKSolver(pin_model, gain=IK_GAIN, damping=IK_DAMPING)
+
+        # 안정화
+        for _ in range(50):
+            p.stepSimulation(physicsClientId=sim)
+
+        return (sim, cue_id, tgt1_id, tgt2_id, cushion_ids, obstacle_ids,
+                tool_id, robot_id, movable_joints, ee_link, tool_cid,
+                ik_solver, pin_model)
 
     # ================================================================
-    # 단일 시뮬레이션 실행
+    # 단일 시뮬레이션
     # ================================================================
 
     def _simulate_one(self, sim_id, cue_id, tgt1_id, tgt2_id, cushion_ids, tool_id,
+                      robot_id, movable_joints, ik_solver, pin_model,
                       cue_start, tgt1_start, tgt2_start,
                       angle, ee_speed, max_steps=2000):
-        """하나의 (angle, ee_speed) 조합을 headless에서 물리 타격 시뮬
+        """PD computed torque 기반 타격 시뮬 (GUI와 동일한 물리)"""
+        from project.trajectory_planner import TrajectoryPlanner
+        sim_dt = 1. / 240
 
-        실제 로봇 타격과 동일:
-        - 도구(0.5kg)를 15° 대각선 방향으로 큐볼 뒤에 배치
-        - 도구에 ee_speed 속도 부여
-        - PyBullet이 충돌 역학을 계산하여 공 궤적 결정
-        """
         # 리셋: 3공
-        p.resetBasePositionAndOrientation(
-            cue_id, list(cue_start), [0,0,0,1], physicsClientId=sim_id)
-        p.resetBaseVelocity(cue_id, [0,0,0], [0,0,0], physicsClientId=sim_id)
-
-        p.resetBasePositionAndOrientation(
-            tgt1_id, list(tgt1_start), [0,0,0,1], physicsClientId=sim_id)
-        p.resetBaseVelocity(tgt1_id, [0,0,0], [0,0,0], physicsClientId=sim_id)
-
+        for bid, pos in [(cue_id, cue_start), (tgt1_id, tgt1_start)]:
+            p.resetBasePositionAndOrientation(bid, list(pos), [0,0,0,1],
+                                              physicsClientId=sim_id)
+            p.resetBaseVelocity(bid, [0,0,0], [0,0,0], physicsClientId=sim_id)
         if tgt2_id is not None and tgt2_start is not None:
-            p.resetBasePositionAndOrientation(
-                tgt2_id, list(tgt2_start), [0,0,0,1], physicsClientId=sim_id)
+            p.resetBasePositionAndOrientation(tgt2_id, list(tgt2_start), [0,0,0,1],
+                                              physicsClientId=sim_id)
             p.resetBaseVelocity(tgt2_id, [0,0,0], [0,0,0], physicsClientId=sim_id)
 
-        # 3D 타격 방향 (15° 대각선 — 실제 로봇과 동일)
-        angle_rad = np.radians(MAZE_STRIKE_ANGLE_DEG)
-        dx = np.cos(angle) * np.cos(angle_rad)
-        dy = np.sin(angle) * np.cos(angle_rad)
-        dz = -np.sin(angle_rad)
-        strike_dir = np.array([dx, dy, dz])
+        # 타격 방향 (20° 비스듬히 — GUI와 동일)
+        tilt_rad = np.radians(MAZE_STRIKE_ANGLE_DEG)
+        strike_dir = np.array([
+            np.cos(angle) * np.cos(tilt_rad),
+            np.sin(angle) * np.cos(tilt_rad),
+            -np.sin(tilt_rad)
+        ])
         strike_dir /= np.linalg.norm(strike_dir)
 
-        # 도구 배치: 큐볼 뒤쪽 (타격 방향 반대)
-        gap = MAZE_BALL_RADIUS + TOOL_HEAD_RADIUS + 0.005
-        tool_pos = np.array(cue_start) - strike_dir * gap
-        p.resetBasePositionAndOrientation(
-            tool_id, list(tool_pos), [0,0,0,1], physicsClientId=sim_id)
+        # SE3 계산 — 도구 끝이 공 중심을 향함
+        ball_pos = np.array(cue_start)
+        impact_ee = ball_pos - strike_dir * TOOL_HEAD_LENGTH  # tip이 ball center에 도달
+        ready_ee = impact_ee - strike_dir * STRIKE_APPROACH_DIST
+        follow_ee = impact_ee + strike_dir * STRIKE_FOLLOW_DIST
 
-        # 도구 속도 설정 (타격 방향 × EE 속도)
-        tool_vel = strike_dir * ee_speed
-        p.resetBaseVelocity(tool_id, list(tool_vel), [0,0,0], physicsClientId=sim_id)
+        # EE orientation (z축 = strike_dir)
+        z_ax = strike_dir
+        up = np.array([0, 0, 1.0])
+        x_ax = np.cross(up, z_ax)
+        if np.linalg.norm(x_ax) < 1e-6:
+            x_ax = np.array([1, 0, 0.0])
+        x_ax /= np.linalg.norm(x_ax)
+        y_ax = np.cross(z_ax, x_ax)
+        R = np.column_stack([x_ax, y_ax, z_ax])
 
-        # 시뮬 실행 + 접촉 감지
-        hit_t1 = False
-        hit_t2 = False
-        cushion_contacts = 0
-        cue_path = []
-        tgt1_path = []
-        tgt2_path = []
-        prev_cushion_contact = set()
-        tool_removed = False
+        def make_T(pos):
+            T = np.eye(4); T[:3, :3] = R; T[:3, 3] = pos; return T
+
+        T_ready = make_T(ready_ee)
+        T_follow = make_T(follow_ee)
+
+        # 로봇을 ready에 텔레포트
+        home_q = np.array(HOME_Q_RAD).reshape(-1, 1)
+        q_ready = home_q.copy()
+        for _ in range(20):
+            q_ready = ik_solver.solve_step(q_ready, T_ready)
+        for i, jidx in enumerate(movable_joints):
+            p.resetJointState(robot_id, jidx, float(q_ready[i, 0]), 0,
+                              physicsClientId=sim_id)
+
+        # PD 안정화 (Kp=800)
+        for _ in range(240):
+            states = [p.getJointState(robot_id, j, physicsClientId=sim_id)
+                      for j in movable_joints]
+            q = np.array([s[0] for s in states]).reshape(-1, 1)
+            qdot = np.array([s[1] for s in states]).reshape(-1, 1)
+            tau = pin_model.M(q) @ (800*(q_ready-q) + 40*(0-qdot)) + \
+                  pin_model.C(q, qdot) @ qdot + pin_model.g(q)
+            p.setJointMotorControlArray(robot_id, movable_joints, p.TORQUE_CONTROL,
+                                        forces=list(tau.flatten()), physicsClientId=sim_id)
+            p.stepSimulation(physicsClientId=sim_id)
+
+        # 도구-큐볼 충돌 활성화
+        p.setCollisionFilterPair(tool_id, cue_id, -1, -1, 1, physicsClientId=sim_id)
+
+        # 궤적 생성 + IK
+        tp = TrajectoryPlanner()
+        full_traj = tp.plan_constant_speed_linear(T_ready, T_follow, ee_speed, sim_dt)
+        if len(full_traj) == 0:
+            return -5000, {'hit_t1': False, 'hit_t2': False,
+                           'cushion_count': 0, 'cue_path': [], 'tgt1_path': [], 'tgt2_path': []}
+
+        q_prev = q_ready.copy()
+        q_traj, qdot_traj = [], []
+        for T in full_traj:
+            q_prev = ik_solver.solve_step(q_prev, T)
+            q_traj.append(q_prev.copy())
+        for k in range(len(q_traj)):
+            qdot_traj.append((q_traj[k+1] - q_traj[k]) / sim_dt if k < len(q_traj)-1
+                             else np.zeros_like(q_traj[0]))
+
+        # 경로 기록 초기화 (strike 전부터 기록 시작)
+        hit_t1, hit_t2, cushion_contacts = False, False, 0
+        events = []  # 접촉 이벤트 순서
+        cue_path = [[cue_start[0], cue_start[1]]]
+        tgt1_path = [[tgt1_start[0], tgt1_start[1]]]
+        tgt2_path = [[tgt2_start[0], tgt2_start[1]]] if tgt2_id else []
+        prev_cushion = set()
+
+        # PD 고게인 스트리밍 (Kp=5000 — GUI와 동일)
+        contact_step = -1
+        collision_off = False
+        for step_i in range(len(q_traj)):
+            states = [p.getJointState(robot_id, j, physicsClientId=sim_id)
+                      for j in movable_joints]
+            q = np.array([s[0] for s in states]).reshape(-1, 1)
+            qdot = np.array([s[1] for s in states]).reshape(-1, 1)
+            tau = pin_model.M(q) @ (5000*(q_traj[step_i]-q) + 200*(qdot_traj[step_i]-qdot)) + \
+                  pin_model.C(q, qdot) @ qdot + pin_model.g(q)
+            p.setJointMotorControlArray(robot_id, movable_joints, p.TORQUE_CONTROL,
+                                        forces=list(tau.flatten()), physicsClientId=sim_id)
+            p.stepSimulation(physicsClientId=sim_id)
+
+            # strike 중 공 위치 기록
+            if step_i % 5 == 0:
+                pos, _ = p.getBasePositionAndOrientation(cue_id, physicsClientId=sim_id)
+                cue_path.append([pos[0], pos[1]])
+                pos1, _ = p.getBasePositionAndOrientation(tgt1_id, physicsClientId=sim_id)
+                tgt1_path.append([pos1[0], pos1[1]])
+                if tgt2_id:
+                    pos2, _ = p.getBasePositionAndOrientation(tgt2_id, physicsClientId=sim_id)
+                    tgt2_path.append([pos2[0], pos2[1]])
+
+            if not collision_off:
+                if contact_step < 0:
+                    if len(p.getContactPoints(bodyA=tool_id, bodyB=cue_id,
+                                              physicsClientId=sim_id)) > 0:
+                        contact_step = step_i
+                elif step_i - contact_step >= 10:
+                    p.setCollisionFilterPair(tool_id, cue_id, -1, -1, 0,
+                                            physicsClientId=sim_id)
+                    collision_off = True
+
+        # 로봇 정지
+        for jidx in movable_joints:
+            p.setJointMotorControl2(robot_id, jidx, p.VELOCITY_CONTROL,
+                                    targetVelocity=0, force=500, physicsClientId=sim_id)
+
+        # 공 구름 관찰 + 접촉 추적 (계속)
 
         for step in range(max_steps):
             p.stepSimulation(physicsClientId=sim_id)
-
-            # 도구 제거: 충돌 완료 후 간섭 방지 (10스텝 ≈ 42ms)
-            if not tool_removed and step >= 10:
-                p.resetBasePositionAndOrientation(
-                    tool_id, [0, 0, -10], [0,0,0,1], physicsClientId=sim_id)
-                p.resetBaseVelocity(tool_id, [0,0,0], [0,0,0], physicsClientId=sim_id)
-                tool_removed = True
-
-            # 3공 위치 기록 (매 10스텝)
             if step % 10 == 0:
                 pos, _ = p.getBasePositionAndOrientation(cue_id, physicsClientId=sim_id)
                 cue_path.append([pos[0], pos[1]])
                 pos1, _ = p.getBasePositionAndOrientation(tgt1_id, physicsClientId=sim_id)
                 tgt1_path.append([pos1[0], pos1[1]])
-                if tgt2_id is not None:
+                if tgt2_id:
                     pos2, _ = p.getBasePositionAndOrientation(tgt2_id, physicsClientId=sim_id)
                     tgt2_path.append([pos2[0], pos2[1]])
 
-            # 접촉 판정 (도구 접촉은 무시)
             contacts = p.getContactPoints(bodyA=cue_id, physicsClientId=sim_id)
-            current_cushion_contact = set()
+            cur_cushion = set()
             for c in contacts:
-                other_id = c[2]
-                if other_id == tool_id:
-                    continue
-                if other_id == tgt1_id:
+                if c[2] == tgt1_id and not hit_t1:
                     hit_t1 = True
-                elif other_id == tgt2_id:
+                    events.append('t1')
+                elif c[2] == tgt2_id and not hit_t2:
                     hit_t2 = True
-                elif other_id in cushion_ids:
-                    current_cushion_contact.add(other_id)
+                    events.append('t2')
+                elif c[2] in cushion_ids:
+                    cur_cushion.add(c[2])
+            new_cushions = cur_cushion - prev_cushion
+            for _ in new_cushions:
+                cushion_contacts += 1
+                events.append('c')
+            prev_cushion = cur_cushion
 
-            new_contacts = current_cushion_contact - prev_cushion_contact
-            cushion_contacts += len(new_contacts)
-            prev_cushion_contact = current_cushion_contact
-
-            # 조기 종료: 모든 공이 멈춤
             if step > 200 and step % 50 == 0:
-                v_cue, _ = p.getBaseVelocity(cue_id, physicsClientId=sim_id)
-                v_t1, _ = p.getBaseVelocity(tgt1_id, physicsClientId=sim_id)
-                speed_cue = np.linalg.norm(v_cue[:2])
-                speed_t1 = np.linalg.norm(v_t1[:2])
-                speed_t2 = 0
-                if tgt2_id is not None:
-                    v_t2, _ = p.getBaseVelocity(tgt2_id, physicsClientId=sim_id)
-                    speed_t2 = np.linalg.norm(v_t2[:2])
-                if speed_cue < 0.005 and speed_t1 < 0.005 and speed_t2 < 0.005:
+                speeds = [np.linalg.norm(p.getBaseVelocity(bid, physicsClientId=sim_id)[0][:2])
+                          for bid in [cue_id, tgt1_id] + ([tgt2_id] if tgt2_id else [])]
+                if all(s < 0.005 for s in speeds):
                     break
 
-        # 스코어링
-        score = self._score_result(
-            cue_id, tgt1_id, tgt2_id, sim_id,
-            cue_start, tgt1_start, tgt2_start,
-            hit_t1, hit_t2, cushion_contacts, cue_path
-        )
-
-        return score, {
-            'hit_t1': hit_t1, 'hit_t2': hit_t2,
-            'cushion_count': cushion_contacts,
-            'cue_path': cue_path,
-            'tgt1_path': tgt1_path,
-            'tgt2_path': tgt2_path,
-        }
+        score = self._score_result(cue_id, tgt1_id, tgt2_id, sim_id,
+                                   cue_start, tgt1_start, tgt2_start,
+                                   hit_t1, hit_t2, cushion_contacts, cue_path,
+                                   events)
+        return score, {'hit_t1': hit_t1, 'hit_t2': hit_t2,
+                       'cushion_count': cushion_contacts, 'events': events,
+                       'cue_path': cue_path, 'tgt1_path': tgt1_path, 'tgt2_path': tgt2_path}
 
     def _score_result(self, cue_id, tgt1_id, tgt2_id, sim_id,
                       cue_start, tgt1_start, tgt2_start,
-                      hit_t1, hit_t2, cushion_count, cue_path):
-        """3쿠션 스코어: hit_t1 + hit_t2 + 쿠션≥3 = 성공"""
+                      hit_t1, hit_t2, cushion_count, cue_path,
+                      events=None):
+        """3쿠션 스코어 — 순서 검증
+        일반: 수구→t1→쿠션3+→t2
+        뱅크: 수구→쿠션3+→t1→t2 (순서 무관)
+        """
         score = 0
-
-        # 큐볼 최종 위치
         cue_final, _ = p.getBasePositionAndOrientation(cue_id, physicsClientId=sim_id)
-        tgt1_final, _ = p.getBasePositionAndOrientation(tgt1_id, physicsClientId=sim_id)
 
-        # 3쿠션 조건
-        if hit_t1:
-            score += 1000
-        if hit_t2:
-            score += 1000
-        if cushion_count >= 3:
-            score += 1000
-        score += min(cushion_count, 6) * 10
+        # 순서 검증
+        valid_3cushion = False
+        if events and hit_t1 and hit_t2:
+            t1_idx = events.index('t1')
+            t2_idx = events.index('t2')
+            # t1과 t2 사이의 쿠션 수
+            cushions_between = events[t1_idx+1:t2_idx].count('c')
+            # t1 이전의 쿠션 수
+            cushions_before_t1 = events[:t1_idx].count('c')
+            # 일반: t1 먼저, 그 후 쿠션 3+ 후 t2
+            if t1_idx < t2_idx and cushions_between >= 3:
+                valid_3cushion = True
+            # 뱅크: 쿠션 3+ 먼저, 그 후 두 적구
+            elif cushions_before_t1 >= 3:
+                valid_3cushion = True
+            # 뱅크 (t2 먼저): 쿠션 3+ 먼저, t2 후 t1
+            elif t2_idx < t1_idx:
+                cushions_before_t2 = events[:t2_idx].count('c')
+                cushions_between_rev = events[t2_idx+1:t1_idx].count('c')
+                if cushions_before_t2 >= 3:
+                    valid_3cushion = True
+                elif cushions_between_rev >= 3:
+                    valid_3cushion = True
 
-        # 미접촉 시: 최근접 거리로 부분 점수
+        if valid_3cushion:
+            score += 3000  # 완벽한 3쿠션
+        else:
+            if hit_t1: score += 500
+            if hit_t2: score += 500
+            score += min(cushion_count, 6) * 10
+
+        # 미적중 시 근접도 보너스
         if not hit_t1:
-            cue_arr = np.array(cue_path)
-            if len(cue_arr) > 0:
-                dists = np.sqrt((cue_arr[:,0] - tgt1_start[0])**2 +
-                               (cue_arr[:,1] - tgt1_start[1])**2)
-                score -= dists.min() * 500
-
+            arr = np.array(cue_path)
+            if len(arr) > 0:
+                score -= np.min(np.sqrt((arr[:,0]-tgt1_start[0])**2 +
+                                        (arr[:,1]-tgt1_start[1])**2)) * 500
         if not hit_t2 and tgt2_id is not None:
-            cue_arr = np.array(cue_path)
-            if len(cue_arr) > 0:
-                dists = np.sqrt((cue_arr[:,0] - tgt2_start[0])**2 +
-                               (cue_arr[:,1] - tgt2_start[1])**2)
-                score -= dists.min() * 500
+            arr = np.array(cue_path)
+            if len(arr) > 0:
+                score -= np.min(np.sqrt((arr[:,0]-tgt2_start[0])**2 +
+                                        (arr[:,1]-tgt2_start[1])**2)) * 500
 
-        # 큐볼이 테이블 밖으로 나가면 큰 패널티
         b = self.bounds
-        cx, cy = cue_final[0], cue_final[1]
-        if cx < b['x_min'] - 0.05 or cx > b['x_max'] + 0.05 or \
-           cy < b['y_min'] - 0.05 or cy > b['y_max'] + 0.05:
+        if (cue_final[0] < b['x_min']-0.05 or cue_final[0] > b['x_max']+0.05 or
+            cue_final[1] < b['y_min']-0.05 or cue_final[1] > b['y_max']+0.05):
             score -= 2000
 
         return score

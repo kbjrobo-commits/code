@@ -358,17 +358,19 @@ class AutonomousStateMachine:
             ball_path = chosen_candidate.get('ball_path')
             if ball_path is not None and len(ball_path) > 1:
                 for i in range(len(ball_path) - 1):
-                    p1 = [ball_path[i][0], ball_path[i][1], surface_z]
-                    p2 = [ball_path[i+1][0], ball_path[i+1][1], surface_z]
-                    _p.addUserDebugLine(p1, p2, [0, 0.5, 1], lineWidth=3,
-                                       lifeTime=30, physicsClientId=self.env.client)
+                    d = np.linalg.norm(np.array(ball_path[i]) - np.array(ball_path[i+1]))
+                    if d > 0.01:
+                        p1 = [ball_path[i][0], ball_path[i][1], surface_z]
+                        p2 = [ball_path[i+1][0], ball_path[i+1][1], surface_z]
+                        _p.addUserDebugLine(p1, p2, [0, 0.5, 1], lineWidth=3,
+                                           lifeTime=30, physicsClientId=self.env.client)
 
             # 목표공1 경로 (노란색)
             tgt1_path = chosen_candidate.get('tgt1_path')
             if tgt1_path is not None and len(tgt1_path) > 1:
                 for i in range(len(tgt1_path) - 1):
                     d = np.linalg.norm(np.array(tgt1_path[i]) - np.array(tgt1_path[i+1]))
-                    if d > 0.001:  # 멈춰있을 때는 안 그림
+                    if d > 0.01:
                         p1 = [tgt1_path[i][0], tgt1_path[i][1], surface_z]
                         p2 = [tgt1_path[i+1][0], tgt1_path[i+1][1], surface_z]
                         _p.addUserDebugLine(p1, p2, [1, 0.9, 0], lineWidth=2,
@@ -379,7 +381,7 @@ class AutonomousStateMachine:
             if tgt2_path is not None and len(tgt2_path) > 1:
                 for i in range(len(tgt2_path) - 1):
                     d = np.linalg.norm(np.array(tgt2_path[i]) - np.array(tgt2_path[i+1]))
-                    if d > 0.001:
+                    if d > 0.01:
                         p1 = [tgt2_path[i][0], tgt2_path[i][1], surface_z]
                         p2 = [tgt2_path[i+1][0], tgt2_path[i+1][1], surface_z]
                         _p.addUserDebugLine(p1, p2, [1, 0.2, 0.2], lineWidth=2,
@@ -391,13 +393,23 @@ class AutonomousStateMachine:
         print(f"  Trajectory: {len(trajectory)} points")
         print(f"    EE strike speed: {strike_speed:.3f} m/s")
 
-        self._strike_skipped = False
+        # 실행 전: 도구-큐볼 충돌 재활성화
+        if hasattr(self.controller, '_reenable_tool_cue_collision'):
+            self.controller._reenable_tool_cue_collision()
 
-        # 실행
-        self.controller.execute_trajectory(
+        # 접촉 추적 리셋
+        if hasattr(self.env, 'reset_contact_tracking'):
+            self.env.reset_contact_tracking()
+
+        # 실행 (도구가 물리적으로 공을 타격)
+        result = self.controller.execute_trajectory(
             trajectory, dt=0.002, phase_indices=phases,
-            strike_speed=strike_speed
+            strike_speed=strike_speed,
+            q_trajectory=best_result['q_trajectory']
         )
+        if result is False:
+            print(f"  Strike aborted (Ready err too large)")
+            self._strike_skipped = True
 
     def _observe(self):
         """OBSERVE: 결과 관찰"""
@@ -436,13 +448,41 @@ class AutonomousStateMachine:
                     import time as _t; _t.sleep(0.5)
                     return False
             hit = self.env.is_target_hit()
+            events = getattr(self.env, '_contact_events', [])
+            cushion_count = getattr(self.env, '_contact_cushion_count', 0)
             cue = self.env.get_cue_ball_position()
             tgt1 = self.env.get_target_ball_position()
             tgt2 = self.env.get_ball2_position() if hasattr(self.env, 'get_ball2_position') else cue
-            d1 = np.linalg.norm(cue[:2] - tgt1[:2])
-            d2 = np.linalg.norm(cue[:2] - tgt2[:2])
-            print(f"  3-cushion: both_hit={hit}, d(cue-tgt1)={d1:.4f}m, d(cue-tgt2)={d2:.4f}m")
-            return hit
+            cue_moved = np.linalg.norm(cue[:2] - self.env.cue_start_pos[:2])
+            tgt1_moved = np.linalg.norm(tgt1[:2] - self.env.target_start_pos[:2])
+            tgt2_moved = np.linalg.norm(tgt2[:2] - self.env.ball2_start_pos[:2]) if hasattr(self.env, 'ball2_start_pos') else 0
+
+            # 3쿠션 순서 검증
+            valid_3cushion = False
+            hit_t1 = getattr(self.env, '_contact_hit_t1', False)
+            hit_t2 = getattr(self.env, '_contact_hit_t2', False)
+            if events and hit_t1 and hit_t2:
+                t1_idx = events.index('t1') if 't1' in events else -1
+                t2_idx = events.index('t2') if 't2' in events else -1
+                if t1_idx >= 0 and t2_idx >= 0:
+                    if t1_idx < t2_idx:
+                        c_between = events[t1_idx+1:t2_idx].count('c')
+                        c_before = events[:t1_idx].count('c')
+                        if c_between >= 3 or c_before >= 3:
+                            valid_3cushion = True
+                    else:
+                        c_before = events[:t2_idx].count('c')
+                        c_between = events[t2_idx+1:t1_idx].count('c')
+                        if c_between >= 3 or c_before >= 3:
+                            valid_3cushion = True
+
+            print(f"  3-cushion: events={events}, cushions={cushion_count}")
+            print(f"  Displacements: cue={cue_moved*100:.1f}cm, tgt1={tgt1_moved*100:.1f}cm, tgt2={tgt2_moved*100:.1f}cm")
+            if valid_3cushion:
+                print(f"  [OK] Valid 3-cushion sequence!")
+            elif hit_t1 and hit_t2:
+                print(f"  [FAIL] Both hit but NOT valid 3-cushion")
+            return valid_3cushion
         else:  # billiards
             self.env.wait_balls_stop(timeout=8.0)
             if self.env.is_ball_out_of_table(self.env.cue_ball_id):

@@ -41,24 +41,25 @@ class MazeEnvironment:
         L = MAZE_TABLE_LENGTH
         W = MAZE_TABLE_WIDTH
         H = MAZE_TABLE_SURFACE_HEIGHT
+        CX = MAZE_TABLE_CENTER_X
         CY = MAZE_TABLE_CENTER_Y
         TH = MAZE_TABLE_HEIGHT
         ball_h = H + TH / 2 + MAZE_BALL_RADIUS + 0.001
 
-        self.table_center = np.array([0.5, CY, H])
+        self.table_center = np.array([CX, CY, H])
         self.table_bounds = {
-            'x_min': 0.5 - L / 2, 'x_max': 0.5 + L / 2,
+            'x_min': CX - L / 2, 'x_max': CX + L / 2,
             'y_min': CY - W / 2, 'y_max': CY + W / 2
         }
         self._surface_z = H + TH / 2  # 테이블 표면 z 좌표
 
         if cue_pos is None:
-            cue_pos = [0.5, CY - W / 4, ball_h]
+            cue_pos = [CX, CY - W / 4, ball_h]
         if target_pos is None:
-            target_pos = [0.5, CY + W / 8, ball_h]
+            target_pos = [CX, CY + W / 8, ball_h]
         # 3번째 공 (쓰리쿠션: 백, 황, 적)
         if ball2_pos is None:
-            ball2_pos = [0.5 + L / 6, CY, ball_h]
+            ball2_pos = [CX + L / 6, CY, ball_h]
 
         self.cue_start_pos = np.array(cue_pos)
         self.target_start_pos = np.array(target_pos)
@@ -254,28 +255,41 @@ class MazeEnvironment:
         return False
 
     def is_target_hit(self, threshold=0.01):
-        """쓰리쿠션: 큐볼이 두 목표공 모두에 접촉했는지 판정"""
-        cue = self.get_cue_ball_position()
-        tgt1 = self.get_target_ball_position()
-        tgt2 = self.get_ball2_position()
-        d1 = np.linalg.norm(cue[:2] - tgt1[:2])
-        d2 = np.linalg.norm(cue[:2] - tgt2[:2])
-        contact_dist = MAZE_BALL_RADIUS * 2 + threshold
-        hit1 = d1 < contact_dist
-        hit2 = d2 < contact_dist
-        # 쓰리쿠션: 두 공 모두 접촉해야 득점
-        return hit1 and hit2
+        """쓰리쿠션: 큐볼이 두 목표공 모두에 접촉했는지 판정 (접촉 추적 기반)"""
+        return getattr(self, '_contact_hit_t1', False) and \
+               getattr(self, '_contact_hit_t2', False)
 
     def wait_balls_stop(self, timeout=10.0, check_interval=0.1):
+        """공이 멈출 때까지 대기 + 접촉 추적"""
         import time
+        self._contact_hit_t1 = getattr(self, '_contact_hit_t1', False)
+        self._contact_hit_t2 = getattr(self, '_contact_hit_t2', False)
+        self._cushion_contacts = getattr(self, '_cushion_contacts', 0)
         start = time.time()
         while time.time() - start < timeout:
+            # 접촉 추적
+            contacts = p.getContactPoints(bodyA=self.cue_ball_id,
+                                          physicsClientId=self.client)
+            for c in contacts:
+                if c[2] == self.target_ball_id:
+                    self._contact_hit_t1 = True
+                elif c[2] == self.ball2_id:
+                    self._contact_hit_t2 = True
             if self.are_balls_stopped():
                 return True
             time.sleep(check_interval)
         return False
 
-    def reset_balls(self, cue_pos=None, target_pos=None):
+    def reset_contact_tracking(self):
+        """새 라운드 시작 시 접촉 추적 리셋"""
+        self._contact_hit_t1 = False
+        self._contact_hit_t2 = False
+        self._cushion_contacts = 0
+        self._contact_events = []
+        self._contact_cushion_set = set()
+        self._contact_cushion_count = 0
+
+    def reset_balls(self, cue_pos=None, target_pos=None, ball2_pos=None):
         """공 위치 리셋 — None이면 해당 공은 건드리지 않음"""
         if cue_pos is not None:
             p.resetBasePositionAndOrientation(self.cue_ball_id, list(cue_pos), [0,0,0,1],
@@ -286,6 +300,11 @@ class MazeEnvironment:
             p.resetBasePositionAndOrientation(self.target_ball_id, list(target_pos), [0,0,0,1],
                                               physicsClientId=self.client)
             p.resetBaseVelocity(self.target_ball_id, [0,0,0], [0,0,0],
+                                physicsClientId=self.client)
+        if ball2_pos is not None and hasattr(self, 'ball2_id'):
+            p.resetBasePositionAndOrientation(self.ball2_id, list(ball2_pos), [0,0,0,1],
+                                              physicsClientId=self.client)
+            p.resetBaseVelocity(self.ball2_id, [0,0,0], [0,0,0],
                                 physicsClientId=self.client)
 
     # ─── 도구 & 충돌 관리 ─────────────────────────────
