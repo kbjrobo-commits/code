@@ -197,7 +197,8 @@ class IKSolver:
         q_prev = q_i.copy()
 
         for idx, T_goal in enumerate(trajectory_SE3):
-            q_i = self.solve_step(q_i, T_goal)
+            for _ in range(5):
+                q_i = self.solve_step(q_i, T_goal)
             q_trajectory.append(q_i.copy())
 
             # 1. Manipulability 검사

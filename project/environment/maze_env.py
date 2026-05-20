@@ -1,8 +1,8 @@
 """
-미로 환경 (PyBullet)
+誘몃줈 ?섍꼍 (PyBullet)
 =====================
-자석 그리드 + 무작위 원기둥 장애물 + 쿠션 4면 당구대
-기획서 2.1절: 이산화 자석 강체 그리드
+?먯꽍 洹몃━??+ 臾댁옉???먭린???μ븷臾?+ 荑좎뀡 4硫??밴뎄?
+湲고쉷??2.1?? ?댁궛???먯꽍 媛뺤껜 洹몃━??
 """
 import numpy as np
 import pybullet as p
@@ -15,7 +15,7 @@ from project.config import *
 
 
 class MazeEnvironment:
-    """자석 그리드 + 무작위 장애물 미로 환경"""
+    """?먯꽍 洹몃━??+ 臾댁옉???μ븷臾?誘몃줈 ?섍꼍"""
 
     def __init__(self, client_id):
         self.client = client_id
@@ -29,14 +29,14 @@ class MazeEnvironment:
 
     def setup(self, cue_pos=None, target_pos=None, ball2_pos=None,
               num_obstacles=5, seed=None, obstacle_positions=None):
-        """환경 초기화
+        """?섍꼍 珥덇린??
 
         Args:
-            cue_pos: 큐볼 위치 [x, y, z]
-            target_pos: 목표공 위치 [x, y, z]
-            num_obstacles: 무작위 장애물 개수
-            seed: 랜덤 시드
-            obstacle_positions: 수동 장애물 좌표 [(x,y), ...] — 비전 스캔 결과 입력용
+            cue_pos: ?먮낵 ?꾩튂 [x, y, z]
+            target_pos: 紐⑺몴怨??꾩튂 [x, y, z]
+            num_obstacles: 臾댁옉???μ븷臾?媛쒖닔
+            seed: ?쒕뜡 ?쒕뱶
+            obstacle_positions: ?섎룞 ?μ븷臾?醫뚰몴 [(x,y), ...] ??鍮꾩쟾 ?ㅼ틪 寃곌낵 ?낅젰??
         """
         L = MAZE_TABLE_LENGTH
         W = MAZE_TABLE_WIDTH
@@ -51,13 +51,13 @@ class MazeEnvironment:
             'x_min': CX - L / 2, 'x_max': CX + L / 2,
             'y_min': CY - W / 2, 'y_max': CY + W / 2
         }
-        self._surface_z = H + TH / 2  # 테이블 표면 z 좌표
+        self._surface_z = H + TH / 2  # ?뚯씠釉??쒕㈃ z 醫뚰몴
 
         if cue_pos is None:
             cue_pos = [CX, CY - W / 4, ball_h]
         if target_pos is None:
             target_pos = [CX, CY + W / 8, ball_h]
-        # 3번째 공 (쓰리쿠션: 백, 황, 적)
+        # 3踰덉㎏ 怨?(?곕━荑좎뀡: 諛? ?? ??
         if ball2_pos is None:
             ball2_pos = [CX + L / 6, CY, ball_h]
 
@@ -83,7 +83,7 @@ class MazeEnvironment:
         print(f"  Target2 (red): {ball2_pos}")
         print(f"  Obstacles: {len(self.obstacle_positions)}")
 
-    # ─── 테이블 & 쿠션 ─────────────────────────────────
+    # ??? ?뚯씠釉?& 荑좎뀡 ?????????????????????????????????
 
     def _create_table(self):
         L, W, TH = MAZE_TABLE_LENGTH, MAZE_TABLE_WIDTH, MAZE_TABLE_HEIGHT
@@ -125,7 +125,7 @@ class MazeEnvironment:
                              physicsClientId=self.client)
             self.cushion_ids.append(cid)
 
-    # ─── 공 ──────────────────────────────────────────
+    # ??? 怨???????????????????????????????????????????
 
     def _create_ball(self, position, color, mass=MAZE_BALL_MASS):
         col = p.createCollisionShape(p.GEOM_SPHERE, radius=MAZE_BALL_RADIUS,
@@ -153,22 +153,22 @@ class MazeEnvironment:
     def _create_ball2(self, position):
         self.ball2_id = self._create_ball(position, COLOR_RED)
 
-    # ─── 장애물 배치 ─────────────────────────────────
+    # ??? ?μ븷臾?諛곗튂 ?????????????????????????????????
 
     def _place_obstacles_random(self, n, seed=None):
-        """5cm 그리드에 스냅하여 무작위 장애물 배치"""
+        """5cm 洹몃━?쒖뿉 ?ㅻ깄?섏뿬 臾댁옉???μ븷臾?諛곗튂"""
         if seed is not None:
             np.random.seed(seed)
 
         b = self.table_bounds
         spacing = MAZE_GRID_SPACING
 
-        # 그리드 포인트 생성
+        # 洹몃━???ъ씤???앹꽦
         xs = np.arange(b['x_min'] + spacing, b['x_max'], spacing)
         ys = np.arange(b['y_min'] + spacing, b['y_max'], spacing)
         grid_points = [(x, y) for x in xs for y in ys]
 
-        # 공 근처(반경 8cm) 제외
+        # 怨?洹쇱쿂(諛섍꼍 8cm) ?쒖쇅
         cue_2d = self.cue_start_pos[:2]
         tgt_2d = self.target_start_pos[:2]
         valid = []
@@ -179,17 +179,17 @@ class MazeEnvironment:
                 continue
             valid.append((gx, gy))
 
-        # 랜덤 선택
+        # ?쒕뜡 ?좏깮
         n = min(n, len(valid))
         chosen = [valid[i] for i in np.random.choice(len(valid), n, replace=False)]
         self._place_obstacles_at(chosen)
 
     def _place_obstacles_manual(self, positions):
-        """수동 좌표 기반 장애물 배치 (비전 스캔 결과 입력용)"""
+        """?섎룞 醫뚰몴 湲곕컲 ?μ븷臾?諛곗튂 (鍮꾩쟾 ?ㅼ틪 寃곌낵 ?낅젰??"""
         self._place_obstacles_at(positions)
 
     def _place_obstacles_at(self, positions_2d):
-        """주어진 2D 좌표에 원기둥 장애물 생성"""
+        """二쇱뼱吏?2D 醫뚰몴???먭린???μ븷臾??앹꽦"""
         r = MAZE_OBSTACLE_RADIUS
         h = MAZE_OBSTACLE_HEIGHT
         TH = MAZE_TABLE_HEIGHT
@@ -209,7 +209,7 @@ class MazeEnvironment:
             self.obstacle_ids.append(oid)
             self.obstacle_positions.append((x, y, r))
 
-    # ─── 센서 인터페이스 (Perception용) ─────────────
+    # ??? ?쇱꽌 ?명꽣?섏씠??(Perception?? ?????????????
 
     def get_cue_ball_position(self):
         pos, _ = p.getBasePositionAndOrientation(self.cue_ball_id,
@@ -231,7 +231,7 @@ class MazeEnvironment:
         return np.array(vel)
 
     def get_obstacle_positions(self):
-        """장애물 좌표 리스트 반환 — 탐색기에 전달용"""
+        """Return obstacle positions for the planner."""
         return list(self.obstacle_positions)
 
     def are_balls_stopped(self, threshold=0.005):
@@ -241,47 +241,60 @@ class MazeEnvironment:
         return v1 < threshold and v2 < threshold and v3 < threshold
 
     def is_ball_out_of_table(self, ball_id):
-        """공이 테이블 범위를 벗어났는지 확인"""
+        """怨듭씠 ?뚯씠釉?踰붿쐞瑜?踰쀬뼱?щ뒗吏 ?뺤씤"""
         pos, _ = p.getBasePositionAndOrientation(ball_id,
                                                   physicsClientId=self.client)
         b = self.table_bounds
-        margin = 0.05  # 약간의 여유
+        margin = 0.05  # ?쎄컙???ъ쑀
         if pos[0] < b['x_min'] - margin or pos[0] > b['x_max'] + margin:
             return True
         if pos[1] < b['y_min'] - margin or pos[1] > b['y_max'] + margin:
             return True
-        if pos[2] < self._surface_z - 0.05:  # 테이블 아래로 떨어짐
+        if pos[2] < self._surface_z - 0.05:  # ?뚯씠釉??꾨옒濡??⑥뼱吏?
             return True
         return False
 
     def is_target_hit(self, threshold=0.01):
-        """쓰리쿠션: 큐볼이 두 목표공 모두에 접촉했는지 판정 (접촉 추적 기반)"""
+        """Return whether the cue ball contacted both target balls."""
         return getattr(self, '_contact_hit_t1', False) and \
                getattr(self, '_contact_hit_t2', False)
 
     def wait_balls_stop(self, timeout=10.0, check_interval=0.1):
-        """공이 멈출 때까지 대기 + 접촉 추적"""
+        """Wait until balls stop while tracking contacts."""
         import time
         self._contact_hit_t1 = getattr(self, '_contact_hit_t1', False)
         self._contact_hit_t2 = getattr(self, '_contact_hit_t2', False)
         self._cushion_contacts = getattr(self, '_cushion_contacts', 0)
+        self._contact_events = getattr(self, '_contact_events', [])
+        self._contact_cushion_set = getattr(self, '_contact_cushion_set', set())
+        self._contact_cushion_count = getattr(self, '_contact_cushion_count', 0)
         start = time.time()
         while time.time() - start < timeout:
-            # 접촉 추적
+            # ?묒큺 異붿쟻
             contacts = p.getContactPoints(bodyA=self.cue_ball_id,
                                           physicsClientId=self.client)
+            cur_cushion = set()
             for c in contacts:
-                if c[2] == self.target_ball_id:
+                if c[2] == self.target_ball_id and not self._contact_hit_t1:
                     self._contact_hit_t1 = True
-                elif c[2] == self.ball2_id:
+                    self._contact_events.append('t1')
+                elif c[2] == self.ball2_id and not self._contact_hit_t2:
                     self._contact_hit_t2 = True
+                    self._contact_events.append('t2')
+                elif c[2] in self.cushion_ids:
+                    cur_cushion.add(c[2])
+            new_cushions = cur_cushion - self._contact_cushion_set
+            for _ in new_cushions:
+                self._contact_cushion_count += 1
+                self._contact_events.append('c')
+            self._contact_cushion_set = cur_cushion
             if self.are_balls_stopped():
                 return True
             time.sleep(check_interval)
         return False
 
     def reset_contact_tracking(self):
-        """새 라운드 시작 시 접촉 추적 리셋"""
+        """???쇱슫???쒖옉 ???묒큺 異붿쟻 由ъ뀑"""
         self._contact_hit_t1 = False
         self._contact_hit_t2 = False
         self._cushion_contacts = 0
@@ -290,7 +303,7 @@ class MazeEnvironment:
         self._contact_cushion_count = 0
 
     def reset_balls(self, cue_pos=None, target_pos=None, ball2_pos=None):
-        """공 위치 리셋 — None이면 해당 공은 건드리지 않음"""
+        """怨??꾩튂 由ъ뀑 ??None?대㈃ ?대떦 怨듭? 嫄대뱶由ъ? ?딆쓬"""
         if cue_pos is not None:
             p.resetBasePositionAndOrientation(self.cue_ball_id, list(cue_pos), [0,0,0,1],
                                               physicsClientId=self.client)
@@ -307,12 +320,12 @@ class MazeEnvironment:
             p.resetBaseVelocity(self.ball2_id, [0,0,0], [0,0,0],
                                 physicsClientId=self.client)
 
-    # ─── 도구 & 충돌 관리 ─────────────────────────────
+    # ??? ?꾧뎄 & 異⑸룎 愿由??????????????????????????????
 
     def attach_compact_tool(self, robot_id, ee_link_index,
                             head_length=None, head_radius=None,
                             head_mass=None, head_restitution=None):
-        """EE 끝단에 컴팩트 헤드 부착"""
+        """Attach a compact strike tool to the end effector."""
         if head_length is None: head_length = TOOL_HEAD_LENGTH
         if head_radius is None: head_radius = TOOL_HEAD_RADIUS
         if head_mass is None: head_mass = TOOL_HEAD_MASS
@@ -340,10 +353,10 @@ class MazeEnvironment:
         return head_id
 
     def disable_robot_env_collision(self, robot_id):
-        """로봇 링크와 테이블/쿠션/장애물/공 간 충돌 비활성화
+        """濡쒕큸 留곹겕? ?뚯씠釉?荑좎뀡/?μ븷臾?怨?媛?異⑸룎 鍮꾪솢?깊솕
 
-        로봇 몸체가 접근 시 공이나 장애물을 밀어버리는 것을 방지.
-        도구-큐볼 충돌만 별도로 유지됨.
+        濡쒕큸 紐몄껜媛 ?묎렐 ??怨듭씠???μ븷臾쇱쓣 諛?대쾭由щ뒗 寃껋쓣 諛⑹?.
+        ?꾧뎄-?먮낵 異⑸룎留?蹂꾨룄濡??좎???
         """
         num_joints = p.getNumJoints(robot_id, physicsClientId=self.client)
         env_bodies = ([self.table_id] + self.cushion_ids + self.obstacle_ids
@@ -356,10 +369,10 @@ class MazeEnvironment:
                                          enableCollision=0, physicsClientId=self.client)
 
     def disable_tool_env_collision(self):
-        """도구 충돌 설정: 큐볼만 충돌 유지, 나머지 전부 비활성화"""
+        """?꾧뎄 異⑸룎 ?ㅼ젙: ?먮낵留?異⑸룎 ?좎?, ?섎㉧吏 ?꾨? 鍮꾪솢?깊솕"""
         if self.tool_id is None:
             return
-        # 테이블/쿠션/장애물/목표공과 충돌 비활성화
+        # ?뚯씠釉?荑좎뀡/?μ븷臾?紐⑺몴怨듦낵 異⑸룎 鍮꾪솢?깊솕
         no_collide = ([self.table_id] + self.cushion_ids + self.obstacle_ids
                       + [self.target_ball_id, self.ball2_id])
         for env_body in no_collide:
@@ -367,7 +380,7 @@ class MazeEnvironment:
                 continue
             p.setCollisionFilterPair(self.tool_id, env_body, -1, -1,
                                      enableCollision=0, physicsClientId=self.client)
-        # 도구-큐볼 충돌은 명시적으로 활성화 (타격용)
+        # ?꾧뎄-?먮낵 異⑸룎? 紐낆떆?곸쑝濡??쒖꽦??(?寃⑹슜)
         if self.cue_ball_id is not None:
             p.setCollisionFilterPair(self.tool_id, self.cue_ball_id, -1, -1,
                                      enableCollision=1, physicsClientId=self.client)

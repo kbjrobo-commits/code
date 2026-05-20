@@ -1,7 +1,7 @@
-"""
-자율 루프 State Machine
+﻿"""
+?먯쑉 猷⑦봽 State Machine
 =========================
-SCAN → THINK → ALIGN & STRIKE → OBSERVE & RECALCULATE
+SCAN ??THINK ??ALIGN & STRIKE ??OBSERVE & RECALCULATE
 """
 import time
 import numpy as np
@@ -14,26 +14,26 @@ from project.config import *
 
 
 class AutonomousStateMachine:
-    """자율 타격 루프 상태 머신
+    """?먯쑉 ?寃?猷⑦봽 ?곹깭 癒몄떊
 
     States:
-        SCAN: 공/홀/포켓 위치 인식
-        THINK: 최적 타격 벡터 계산
-        STRIKE: 타격 궤적 생성 및 실행
-        OBSERVE: 결과 관찰 (성공/실패 판정)
+        SCAN: 怨??/?ъ폆 ?꾩튂 ?몄떇
+        THINK: 理쒖쟻 ?寃?踰≫꽣 怨꾩궛
+        STRIKE: ?寃?沅ㅼ쟻 ?앹꽦 諛??ㅽ뻾
+        OBSERVE: 寃곌낵 愿李?(?깃났/?ㅽ뙣 ?먯젙)
     """
 
     def __init__(self, controller, environment, shot_planner, traj_planner,
                  demo_type='minigolf', tool_offset=0.0, perception=None):
         """
         Args:
-            controller: RobotController 인스턴스
+            controller: RobotController ?몄뒪?댁뒪
             environment: MiniGolfEnvironment / BilliardsEnvironment / MazeEnvironment
-            shot_planner: ShotPlanner 인스턴스
-            traj_planner: StrikeTrajectoryPlanner 인스턴스
+            shot_planner: ShotPlanner ?몄뒪?댁뒪
+            traj_planner: StrikeTrajectoryPlanner ?몄뒪?댁뒪
             demo_type: 'minigolf', 'billiards', or 'maze'
-            tool_offset: EE에서 도구 끝까지 거리 (m)
-            perception: PerceptionInterface (None이면 직접 env 접근)
+            tool_offset: EE?먯꽌 ?꾧뎄 ?앷퉴吏 嫄곕━ (m)
+            perception: PerceptionInterface (None?대㈃ 吏곸젒 env ?묎렐)
         """
         self.controller = controller
         self.env = environment
@@ -45,12 +45,20 @@ class AutonomousStateMachine:
         self.state = 'INIT'
         self.attempt = 0
         self.history = []
+        self.last_chosen_candidate = None
+        self.last_executed_scan = None
+        self.last_executed_plan = None
+        self.last_executed_trajectory = None
+        self.last_executed_phases = None
+        self.last_executed_q_trajectory = None
+        self.last_planned_angle_deg = None
+        self.last_planned_strike_dir_3d = None
 
     def run(self, max_attempts=5):
-        """자율 루프 실행
+        """?먯쑉 猷⑦봽 ?ㅽ뻾
 
         Returns:
-            success: 최종 성공 여부
+            success: 理쒖쥌 ?깃났 ?щ?
         """
         self.state = 'SCAN'
         self.attempt = 0
@@ -69,7 +77,7 @@ class AutonomousStateMachine:
             # === SCAN ===
             print(f"\n[STATE: SCAN] Detecting objects...")
             scan_data = self._scan()
-            self.last_scan = scan_data  # 궤적 장애물 체크용
+            self.last_scan = scan_data  # 沅ㅼ쟻 ?μ븷臾?泥댄겕??
             print(f"  Scan result: {scan_data}")
 
             # === THINK ===
@@ -81,10 +89,12 @@ class AutonomousStateMachine:
             # === ALIGN & STRIKE ===
             print(f"\n[STATE: ALIGN & STRIKE] Executing...")
             self._strike_skipped = False
+            self._strike_skip_reason = None
             self._strike(scan_data, plan)
 
             if getattr(self, '_strike_skipped', False):
-                print(f"  Strike skipped (ball unreachable)")
+                reason = getattr(self, '_strike_skip_reason', None) or "ball unreachable or no valid path"
+                print(f"  Strike skipped ({reason})")
                 if self.attempt < max_attempts:
                     self.controller.move_home()
                     time.sleep(1)
@@ -126,7 +136,7 @@ class AutonomousStateMachine:
         return successes > 0
 
     def _scan(self):
-        """SCAN: 공/홀/포켓/장애물 위치 인식"""
+        """SCAN: 怨??/?ъ폆/?μ븷臾??꾩튂 ?몄떇"""
         if self.demo_type == 'maze' and self.perception is not None:
             return self.perception.scan_environment()
 
@@ -156,7 +166,7 @@ class AutonomousStateMachine:
             }
 
     def _think(self, scan_data):
-        """THINK: 최적 타격 벡터 계산"""
+        """THINK: 理쒖쟻 ?寃?踰≫꽣 怨꾩궛"""
         if self.demo_type == 'minigolf':
             terrain_path = getattr(self.env, 'terrain_obj_path', None)
             terrain_offset = getattr(self.env, 'terrain_offset', [0.5, 0, 0])
@@ -183,6 +193,22 @@ class AutonomousStateMachine:
                 scan_data['obstacles'],
                 ball2_pos=scan_data.get('ball2_pos')
             )
+            if not candidates:
+                print("  [FAIL] Planner returned no physically valid 3-cushion candidate.")
+                self.last_chosen_candidate = None
+                self.last_executed_scan = scan_data.copy() if isinstance(scan_data, dict) else scan_data
+                self.last_executed_plan = None
+                self.last_executed_trajectory = None
+                self.last_executed_phases = None
+                self.last_executed_q_trajectory = None
+                self.last_planned_angle_deg = None
+                return {
+                    'strike_dir': np.array([1.0, 0.0]),
+                    'strike_speed': 0.0,
+                    'ball_pos': scan_data['cue_pos'],
+                    'ball_path': None,
+                    'candidates': [],
+                }
             best = candidates[0]
             print(f"  Found {len(candidates)} diverse candidates")
             print(f"  Top: angle={best['angle_deg']:.1f}deg, "
@@ -195,7 +221,7 @@ class AutonomousStateMachine:
                 'strike_speed': best['strike_speed'],
                 'ball_pos': scan_data['cue_pos'],
                 'ball_path': best.get('ball_path'),
-                'candidates': candidates,  # 전체 후보 리스트
+                'candidates': candidates,  # ?꾩껜 ?꾨낫 由ъ뒪??
             }
         else:  # billiards
             result = self.planner.find_best_pocket_shot(
@@ -212,16 +238,22 @@ class AutonomousStateMachine:
             }
 
     def _strike(self, scan_data, plan):
-        """ALIGN & STRIKE: 후보 순회 → IK+장애물 검증 → 첫 번째 유효 후보만 실행
+        """ALIGN & STRIKE: ?꾨낫 ?쒗쉶 ??IK+?μ븷臾?寃利???泥?踰덉㎏ ?좏슚 ?꾨낫留??ㅽ뻾
 
-        핵심: 계획기가 여러 후보를 리턴하면, 각 후보에 대해
-        모든 φ를 시도하여 IK+장애물 전부 통과하는 조합을 찾음.
-        전부 실패하면 skip.
+        ?듭떖: 怨꾪쉷湲곌? ?щ윭 ?꾨낫瑜?由ы꽩?섎㈃, 媛??꾨낫?????
+        紐⑤뱺 ?瑜??쒕룄?섏뿬 IK+?μ븷臾??꾨? ?듦낵?섎뒗 議고빀??李얠쓬.
+        ?꾨? ?ㅽ뙣?섎㈃ skip.
         """
         T_current = self.controller.get_current_T()
         ball_pos = plan['ball_pos']
 
-        # 도달 가능성 확인
+        if self.demo_type == 'maze' and not plan.get('candidates'):
+            print("  [FAIL] No valid 3-cushion candidate to execute.")
+            self._strike_skipped = True
+            self._strike_skip_reason = "no valid 3-cushion candidate"
+            return
+
+        # ?꾨떖 媛?μ꽦 ?뺤씤
         ball_dist_from_base = np.linalg.norm(ball_pos[:2])
         if ball_dist_from_base > 0.80:
             print(f"  [WARNING] Ball too far from robot ({ball_dist_from_base:.3f}m > 0.80m).")
@@ -234,30 +266,32 @@ class AutonomousStateMachine:
             else:
                 print(f"  Skipping strike.")
                 self._strike_skipped = True
+                self._strike_skip_reason = "ball unreachable"
                 return
 
         strike_height = ball_pos[2]
 
-        # 장애물 좌표
+        # ?μ븷臾?醫뚰몴
         obs_list = []
         if hasattr(self, 'last_scan') and self.last_scan is not None:
             obs_list = self.last_scan.get('obstacles', [])
 
-        # 후보 리스트 (maze는 다중 후보, 그 외는 단일)
+        # ?꾨낫 由ъ뒪??(maze???ㅼ쨷 ?꾨낫, 洹??몃뒗 ?⑥씪)
         candidates = plan.get('candidates', [plan])
 
         q_current = self.controller.get_current_q()
         phi_candidates = np.linspace(0, 2 * np.pi, 12, endpoint=False)
 
-        # === 후보 순회: 각 후보 × 각 φ 조합 시도 ===
+        # === ?꾨낫 ?쒗쉶: 媛??꾨낫 횞 媛?? 議고빀 ?쒕룄 ===
         found = False
         chosen_candidate = None
+        chosen_strike_dir_3d = None
 
         for ci, candidate in enumerate(candidates):
             strike_dir_2d = candidate['strike_dir']
             strike_speed = candidate['strike_speed']
 
-            # 2D → 3D 방향 변환
+            # 2D ??3D 諛⑺뼢 蹂??
             if self.demo_type in ('billiards', 'maze'):
                 angle_deg = BILLIARD_STRIKE_ANGLE_DEG if self.demo_type == 'billiards' else MAZE_STRIKE_ANGLE_DEG
                 angle_rad = np.radians(angle_deg)
@@ -293,10 +327,10 @@ class AutonomousStateMachine:
                     tool_rotation=phi
                 )
 
-                # 장애물 근접 체크
+                # ?μ븷臾?洹쇱젒 泥댄겕
                 obstacle_clear = True
                 if obs_list:
-                    clearance = 0.07  # 장애물 r(1.5cm) + EE(3cm) + 여유(2.5cm)
+                    clearance = 0.07  # ?μ븷臾?r(1.5cm) + EE(3cm) + ?ъ쑀(2.5cm)
                     check_start = max(phases['approach'][1] - 200, 0)
                     check_end = phases['strike'][1]
                     for k in range(check_start, min(check_end, len(trajectory)), 10):
@@ -314,7 +348,7 @@ class AutonomousStateMachine:
                 if not obstacle_clear:
                     continue
 
-                # IK 사전검증
+                # IK ?ъ쟾寃利?
                 result = self.controller.ik.solve_trajectory_validated(
                     q_current, trajectory
                 )
@@ -327,7 +361,7 @@ class AutonomousStateMachine:
                         best_trajectory = trajectory
                         best_phases = phases
 
-            # 이 후보에서 유효한 궤적을 찾았으면 사용
+            # ???꾨낫?먯꽌 ?좏슚??沅ㅼ쟻??李얠븯?쇰㈃ ?ъ슜
             if best_result is not None and best_result['valid']:
                 print(f"  [OK] Candidate #{ci+1}/{len(candidates)} valid "
                       f"(angle={candidate['angle_deg']:.1f}deg, phi={np.degrees(best_phi):.0f}deg, "
@@ -337,6 +371,7 @@ class AutonomousStateMachine:
                       f"score={candidate['score']:.0f})")
                 found = True
                 chosen_candidate = candidate
+                chosen_strike_dir_3d = strike_dir_3d.copy()
                 trajectory = best_trajectory
                 phases = best_phases
                 break
@@ -347,36 +382,55 @@ class AutonomousStateMachine:
         if not found:
             print(f"  [FAIL] All {len(candidates)} candidates failed IK+obstacle check. Skipping strike.")
             self._strike_skipped = True
+            self._strike_skip_reason = "IK or obstacle validation failed"
             return
 
-        # 시각화 (선택된 후보의 3공 궤적)
+        # ?쒓컖??(?좏깮???꾨낫??3怨?沅ㅼ쟻)
+        self.last_chosen_candidate = chosen_candidate
+        self.last_executed_scan = scan_data.copy() if isinstance(scan_data, dict) else scan_data
+        self.last_executed_plan = plan.copy() if isinstance(plan, dict) else plan
+        self.last_executed_trajectory = trajectory
+        self.last_executed_phases = phases
+        self.last_executed_q_trajectory = best_result['q_trajectory']
+        self.last_planned_strike_dir_3d = chosen_strike_dir_3d
+        self.last_planned_angle_deg = chosen_candidate.get('angle_deg')
+        raw_speed = chosen_candidate.get('input_speed_raw')
+        used_speed = chosen_candidate.get('ee_speed_used', chosen_candidate.get('strike_speed'))
+        if raw_speed is not None:
+            print(f"    [PLAN] selected angle={self.last_planned_angle_deg:.1f}deg, "
+                  f"raw_speed={raw_speed:.3f}, used_speed={used_speed:.3f}, "
+                  f"clipped={chosen_candidate.get('speed_was_clipped', False)}")
+        print(f"    [PLAN] valid_3cushion={chosen_candidate.get('valid_3cushion')}, "
+              f"events={chosen_candidate.get('events', [])}, "
+              f"planned_ball_angle={chosen_candidate.get('initial_ball_angle_deg')}")
+
         if hasattr(self.env, 'client'):
             import pybullet as _p
             surface_z = ball_pos[2]
 
-            # 큐볼 경로 (파란색)
+            # ?먮낵 寃쎈줈 (?뚮???
             ball_path = chosen_candidate.get('ball_path')
             if ball_path is not None and len(ball_path) > 1:
                 for i in range(len(ball_path) - 1):
                     d = np.linalg.norm(np.array(ball_path[i]) - np.array(ball_path[i+1]))
-                    if d > 0.01:
+                    if d > 0.003:
                         p1 = [ball_path[i][0], ball_path[i][1], surface_z]
                         p2 = [ball_path[i+1][0], ball_path[i+1][1], surface_z]
                         _p.addUserDebugLine(p1, p2, [0, 0.5, 1], lineWidth=3,
                                            lifeTime=30, physicsClientId=self.env.client)
 
-            # 목표공1 경로 (노란색)
+            # 紐⑺몴怨? 寃쎈줈 (?몃???
             tgt1_path = chosen_candidate.get('tgt1_path')
             if tgt1_path is not None and len(tgt1_path) > 1:
                 for i in range(len(tgt1_path) - 1):
                     d = np.linalg.norm(np.array(tgt1_path[i]) - np.array(tgt1_path[i+1]))
-                    if d > 0.01:
+                    if d > 0.003:
                         p1 = [tgt1_path[i][0], tgt1_path[i][1], surface_z]
                         p2 = [tgt1_path[i+1][0], tgt1_path[i+1][1], surface_z]
                         _p.addUserDebugLine(p1, p2, [1, 0.9, 0], lineWidth=2,
                                            lifeTime=30, physicsClientId=self.env.client)
 
-            # 목표공2 경로 (빨간색)
+            # 紐⑺몴怨? 寃쎈줈 (鍮④컙??
             tgt2_path = chosen_candidate.get('tgt2_path')
             if tgt2_path is not None and len(tgt2_path) > 1:
                 for i in range(len(tgt2_path) - 1):
@@ -393,15 +447,15 @@ class AutonomousStateMachine:
         print(f"  Trajectory: {len(trajectory)} points")
         print(f"    EE strike speed: {strike_speed:.3f} m/s")
 
-        # 실행 전: 도구-큐볼 충돌 재활성화
+        # ?ㅽ뻾 ?? ?꾧뎄-?먮낵 異⑸룎 ?ы솢?깊솕
         if hasattr(self.controller, '_reenable_tool_cue_collision'):
             self.controller._reenable_tool_cue_collision()
 
-        # 접촉 추적 리셋
+        # ?묒큺 異붿쟻 由ъ뀑
         if hasattr(self.env, 'reset_contact_tracking'):
             self.env.reset_contact_tracking()
 
-        # 실행 (도구가 물리적으로 공을 타격)
+        # ?ㅽ뻾 (?꾧뎄媛 臾쇰━?곸쑝濡?怨듭쓣 ?寃?
         result = self.controller.execute_trajectory(
             trajectory, dt=0.002, phase_indices=phases,
             strike_speed=strike_speed,
@@ -410,24 +464,25 @@ class AutonomousStateMachine:
         if result is False:
             print(f"  Strike aborted (Ready err too large)")
             self._strike_skipped = True
+            self._strike_skip_reason = "trajectory execution aborted"
 
     def _observe(self):
-        """OBSERVE: 결과 관찰"""
+        """Observe the shot result."""
 
-        # 임팩트 직후 공 속도 측정 (계획 vs 실제 비교용)
+        # ?꾪뙥??吏곹썑 怨??띾룄 痢≪젙 (怨꾪쉷 vs ?ㅼ젣 鍮꾧탳??
         if self.demo_type == 'minigolf':
             ball_vel = self.env.get_ball_velocity()
             ball_speed = np.linalg.norm(ball_vel[:2])
             print(f"  Ball velocity after impact: {ball_speed:.3f} m/s "
                   f"[{ball_vel[0]:.3f}, {ball_vel[1]:.3f}, {ball_vel[2]:.3f}]")
 
-        # 공이 멈출 때까지 대기
+        # 怨듭씠 硫덉텧 ?뚭퉴吏 ?湲?
         if self.demo_type == 'minigolf':
             self.env.wait_ball_stop(timeout=8.0)
             return self.env.is_hole_in()
         elif self.demo_type == 'maze':
             self.env.wait_balls_stop(timeout=8.0)
-            # 공이 테이블 밖으로 나갔으면 리셋
+            # 怨듭씠 ?뚯씠釉?諛뽰쑝濡??섍컮?쇰㈃ 由ъ뀑
             if hasattr(self.env, 'is_ball_out_of_table'):
                 cue_out = self.env.is_ball_out_of_table(self.env.cue_ball_id)
                 tgt_out = self.env.is_ball_out_of_table(self.env.target_ball_id)
@@ -437,7 +492,7 @@ class AutonomousStateMachine:
                     reset_cue = self.env.cue_start_pos if cue_out else None
                     reset_tgt = self.env.target_start_pos if tgt_out else None
                     self.env.reset_balls(cue_pos=reset_cue, target_pos=reset_tgt)
-                    # ball2 리셋 (pybullet 직접 호출)
+                    # ball2 由ъ뀑 (pybullet 吏곸젒 ?몄텧)
                     if b2_out and hasattr(self.env, 'ball2_start_pos'):
                         import pybullet
                         pybullet.resetBasePositionAndOrientation(
@@ -457,8 +512,11 @@ class AutonomousStateMachine:
             tgt1_moved = np.linalg.norm(tgt1[:2] - self.env.target_start_pos[:2])
             tgt2_moved = np.linalg.norm(tgt2[:2] - self.env.ball2_start_pos[:2]) if hasattr(self.env, 'ball2_start_pos') else 0
 
-            # 3쿠션 순서 검증
+            # 3荑좎뀡 ?쒖꽌 寃利?
             valid_3cushion = False
+            rule_case = 'missing-target-contact'
+            cushions_before_first = 0
+            cushions_between_targets = 0
             hit_t1 = getattr(self.env, '_contact_hit_t1', False)
             hit_t2 = getattr(self.env, '_contact_hit_t2', False)
             if events and hit_t1 and hit_t2:
@@ -466,22 +524,43 @@ class AutonomousStateMachine:
                 t2_idx = events.index('t2') if 't2' in events else -1
                 if t1_idx >= 0 and t2_idx >= 0:
                     if t1_idx < t2_idx:
-                        c_between = events[t1_idx+1:t2_idx].count('c')
-                        c_before = events[:t1_idx].count('c')
-                        if c_between >= 3 or c_before >= 3:
+                        c_total = events[:t2_idx].count('c')
+                        cushions_before_first = events[:t1_idx].count('c')
+                        cushions_between_targets = events[t1_idx+1:t2_idx].count('c')
+                        if c_total >= 3:
                             valid_3cushion = True
+                            rule_case = 'normal'
+                        else:
+                            rule_case = 'both-hit-not-enough-cushions'
                     else:
-                        c_before = events[:t2_idx].count('c')
-                        c_between = events[t2_idx+1:t1_idx].count('c')
-                        if c_between >= 3 or c_before >= 3:
+                        c_total = events[:t1_idx].count('c')
+                        cushions_before_first = events[:t2_idx].count('c')
+                        cushions_between_targets = events[t2_idx+1:t1_idx].count('c')
+                        if c_total >= 3:
                             valid_3cushion = True
+                            rule_case = 'reverse-order'
+                        else:
+                            rule_case = 'both-hit-not-enough-cushions'
 
             print(f"  3-cushion: events={events}, cushions={cushion_count}")
+            print(f"  3-cushion detail: hit_t1={hit_t1}, hit_t2={hit_t2}, "
+                  f"before_first={cushions_before_first}, "
+                  f"between_targets={cushions_between_targets}, rule={rule_case}")
             print(f"  Displacements: cue={cue_moved*100:.1f}cm, tgt1={tgt1_moved*100:.1f}cm, tgt2={tgt2_moved*100:.1f}cm")
             if valid_3cushion:
                 print(f"  [OK] Valid 3-cushion sequence!")
             elif hit_t1 and hit_t2:
                 print(f"  [FAIL] Both hit but NOT valid 3-cushion")
+            actual_speed = getattr(self.env, '_last_actual_ball_speed', None)
+            actual_angle = getattr(self.env, '_last_actual_ball_angle_deg', None)
+            if actual_speed is not None:
+                angle_text = "n/a" if actual_angle is None else f"{actual_angle:.1f}deg"
+                diff_text = "n/a"
+                if actual_angle is not None and self.last_planned_angle_deg is not None:
+                    diff = abs((actual_angle - self.last_planned_angle_deg + 180) % 360 - 180)
+                    diff_text = f"{diff:.1f}deg"
+                print(f"  Actual initial cue ball: speed={actual_speed:.3f}m/s, "
+                      f"angle={angle_text}, planned={self.last_planned_angle_deg}, diff={diff_text}")
             return valid_3cushion
         else:  # billiards
             self.env.wait_balls_stop(timeout=8.0)
@@ -494,7 +573,7 @@ class AutonomousStateMachine:
             return self.env.is_pocketed()
 
     def _get_result_distance(self):
-        """결과 거리 측정"""
+        """Measure result distance."""
         if self.demo_type == 'minigolf':
             return self.env.get_distance_to_hole()
         elif self.demo_type == 'maze':

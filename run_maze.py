@@ -1,16 +1,15 @@
-"""
-쓰리쿠션 당구 시뮬레이션 — 단일 실행 파일
+﻿"""
+?곕━荑좎뀡 ?밴뎄 ?쒕??덉씠?????⑥씪 ?ㅽ뻾 ?뚯씪
 =============================================
-이 파일 하나만 실행하면 아래 전체가 자동으로 진행됩니다:
+???뚯씪 ?섎굹留??ㅽ뻾?섎㈃ ?꾨옒 ?꾩껜媛 ?먮룞?쇰줈 吏꾪뻾?⑸땲??
 
-  1. GUI 시뮬레이터 실행 (PyBullet)
-  2. 3공 headless 탐색 (최적 타격 각도/속도)
-  3. 다중 후보 IK+장애물 검증
-  4. 로봇 타격 실행 (3회 시도)
-  5. 공 궤적 시각화 (PyBullet debug lines)
-  6. 궤적 플롯 저장 (관절각, 태스크공간, 3D)
+  1. GUI ?쒕??덉씠???ㅽ뻾 (PyBullet)
+  2. 3怨?headless ?먯깋 (理쒖쟻 ?寃?媛곷룄/?띾룄)
+  3. ?ㅼ쨷 ?꾨낫 IK+?μ븷臾?寃利?  4. 濡쒕큸 ?寃??ㅽ뻾 (3???쒕룄)
+  5. 怨?沅ㅼ쟻 ?쒓컖??(PyBullet debug lines)
+  6. 沅ㅼ쟻 ?뚮’ ???(愿?덇컖, ?쒖뒪?ш났媛? 3D)
 
-사용법:
+?ъ슜踰?
     python run_maze.py
     python run_maze.py --obstacles 8
     python run_maze.py --attempts 5
@@ -36,18 +35,18 @@ from project.state_machine import AutonomousStateMachine
 
 def run_maze(num_obstacles=5, max_attempts=3, view_time=15,
              seed=None, save_plots=True):
-    """쓰리쿠션 전체 파이프라인 실행"""
+    """?곕━荑좎뀡 ?꾩껜 ?뚯씠?꾨씪???ㅽ뻾"""
 
     print(f"\n{'='*60}")
     print(f"  3-Cushion Billiards Simulation")
     print(f"{'='*60}")
-    print(f"  장애물: {num_obstacles}개")
-    print(f"  시도 횟수: {max_attempts}회")
-    print(f"  도구: 길이={TOOL_HEAD_LENGTH*100:.0f}cm, 질량={TOOL_HEAD_MASS:.1f}kg")
-    print(f"  마찰: lateral={MAZE_BALL_FRICTION}, rolling={MAZE_BALL_ROLLING_FRICTION}")
+    print(f"  Obstacles: {num_obstacles}")
+    print(f"  Attempts: {max_attempts}")
+    print(f"  Tool: length={TOOL_HEAD_LENGTH*100:.0f}cm, mass={TOOL_HEAD_MASS:.1f}kg")
+    print(f"  Friction: lateral={MAZE_BALL_FRICTION}, rolling={MAZE_BALL_ROLLING_FRICTION}")
     print(f"{'='*60}\n")
 
-    # ── 1. 로봇 + 환경 초기화 ──
+    # ?? 1. 濡쒕큸 + ?섍꼍 珥덇린????
     controller = RobotController(mode='sim')
     controller.connect()
     time.sleep(2)
@@ -72,22 +71,23 @@ def run_maze(num_obstacles=5, max_attempts=3, view_time=15,
     env.disable_robot_env_collision(robot_id)
     env.attach_compact_tool(robot_id, ee_link)
     env.disable_tool_env_collision()
+    controller.set_environment(env)
 
     tool_offset = TOOL_HEAD_LENGTH + MAZE_BALL_RADIUS
     shot_planner = CushionShotPlanner(table_bounds=env.table_bounds)
     perception = SimPerception(env)
 
-    controller.boost_pd_gains(kp=800, kd=40)
+    controller.boost_pd_gains(kp=5000, kd=200)
     time.sleep(3)
 
-    # ── 1b. GUI 워크스페이스 반경 표시 ──
+    # ?? 1b. GUI ?뚰겕?ㅽ럹?댁뒪 諛섍꼍 ?쒖떆 ??
     import pybullet as _p
     client = controller.pb.ClientId
     surface_z = MAZE_TABLE_SURFACE_HEIGHT + MAZE_TABLE_HEIGHT / 2 + 0.002
     n_seg = 64
     for radius, color, label in [
-        (0.70, [0, 1, 0], "safe"),    # 안전 범위 (녹색)
-        (0.80, [1, 0.5, 0], "max"),   # 물리적 한계 (주황)
+        (0.70, [0, 1, 0], "safe"),    # ?덉쟾 踰붿쐞 (?뱀깋)
+        (0.80, [1, 0.5, 0], "max"),   # 臾쇰━???쒓퀎 (二쇳솴)
     ]:
         for i in range(n_seg):
             th0 = 2 * np.pi * i / n_seg
@@ -97,13 +97,13 @@ def run_maze(num_obstacles=5, max_attempts=3, view_time=15,
             _p.addUserDebugLine(
                 [x0, y0, surface_z], [x1, y1, surface_z],
                 color, lineWidth=2, lifeTime=0, physicsClientId=client)
-    # 로봇 베이스 표시
+    # 濡쒕큸 踰좎씠???쒖떆
     _p.addUserDebugText("ROBOT", [0, 0, surface_z + 0.02],
                         textColorRGB=[1, 1, 1], textSize=1.2,
                         physicsClientId=client)
     print(f"  [VIS] Workspace: safe=0.70m (green), max=0.80m (orange)")
 
-    # ── 2. 궤적 생성기 + 상태머신 ──
+    # ?? 2. 沅ㅼ쟻 ?앹꽦湲?+ ?곹깭癒몄떊 ??
     traj_planner = StrikeTrajectoryPlanner(approach_duration=3.0, dt=0.002)
 
     sm = AutonomousStateMachine(
@@ -116,23 +116,23 @@ def run_maze(num_obstacles=5, max_attempts=3, view_time=15,
         perception=perception
     )
 
-    # ── 3. 실행 ──
+    # ?? 3. ?ㅽ뻾 ??
     success = sm.run(max_attempts=max_attempts)
 
     print(f"\n  Result: {'SUCCESS' if success else 'COMPLETED'}")
     print(f"  Viewing for {view_time} seconds...")
     time.sleep(view_time)
 
-    # ── 4. 궤적 플롯 생성 ──
+    # ?? 4. 沅ㅼ쟻 ?뚮’ ?앹꽦 ??
     if save_plots:
         print(f"\n{'='*60}")
-        print(f"  궤적 플롯 생성 중...")
+        print(f"  沅ㅼ쟻 ?뚮’ ?앹꽦 以?..")
         print(f"{'='*60}")
         try:
             _generate_maze_plots(controller, env, shot_planner, traj_planner,
-                                 tool_offset, perception)
+                                 tool_offset, perception, sm)
         except Exception as e:
-            print(f"  [WARNING] 플롯 생성 실패: {e}")
+            print(f"  [WARNING] ?뚮’ ?앹꽦 ?ㅽ뙣: {e}")
 
     if hasattr(env, 'cleanup'):
         env.cleanup()
@@ -141,51 +141,72 @@ def run_maze(num_obstacles=5, max_attempts=3, view_time=15,
 
 
 def _generate_maze_plots(controller, env, planner, traj_planner,
-                         tool_offset, perception):
-    """궤적 데이터로 플롯 생성"""
+                         tool_offset, perception, state_machine=None):
+    """沅ㅼ쟻 ?곗씠?곕줈 ?뚮’ ?앹꽦"""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    # 현재 공 위치로 샘플 궤적 계산
-    scan = perception.scan_environment()
+    executed_candidate = None
+    executed_trajectory = None
+    executed_phases = None
+    executed_q_traj = None
+    if state_machine is not None:
+        executed_candidate = getattr(state_machine, 'last_chosen_candidate', None)
+        executed_trajectory = getattr(state_machine, 'last_executed_trajectory', None)
+        executed_phases = getattr(state_machine, 'last_executed_phases', None)
+        executed_q_traj = getattr(state_machine, 'last_executed_q_trajectory', None)
+
+    # ?꾩옱 怨??꾩튂濡??섑뵆 沅ㅼ쟻 怨꾩궛
+    scan = getattr(state_machine, 'last_executed_scan', None) if state_machine else None
+    if scan is None:
+        scan = perception.scan_environment()
     cue_pos = scan['cue_pos']
     target_pos = scan['target_pos']
     ball2_pos = scan.get('ball2_pos')
     obstacles = scan.get('obstacles', [])
 
-    candidates = planner.plan_shot(cue_pos, target_pos, obstacles,
-                                   ball2_pos=ball2_pos)
-    if not candidates:
-        print("  플롯 생성 불가: 후보 없음")
-        return
+    best = executed_candidate
+    trajectory = executed_trajectory
+    phases = executed_phases
+    q_traj = executed_q_traj
 
-    best = candidates[0]
+    if best is None or trajectory is None or phases is None:
+        print("  [PLOT] No executed candidate cached; replanning as fallback.")
+        candidates = planner.plan_shot(cue_pos, target_pos, obstacles,
+                                       ball2_pos=ball2_pos)
+        if not candidates:
+            print("  ?뚮’ ?앹꽦 遺덇?: ?꾨낫 ?놁쓬")
+            return
+
+        best = candidates[0]
+
     strike_dir_2d = best['strike_dir']
     strike_speed = best['strike_speed']
 
-    # 3D 방향 변환
-    angle_rad = np.radians(MAZE_STRIKE_ANGLE_DEG)
-    horiz = strike_dir_2d / np.linalg.norm(strike_dir_2d)
-    strike_dir_3d = np.array([
-        horiz[0] * np.cos(angle_rad),
-        horiz[1] * np.cos(angle_rad),
-        -np.sin(angle_rad)
-    ])
-    strike_dir_3d = strike_dir_3d / np.linalg.norm(strike_dir_3d)
+    # 3D 諛⑺뼢 蹂??    angle_rad = np.radians(MAZE_STRIKE_ANGLE_DEG)
+    if q_traj is None:
+        angle_rad = np.radians(MAZE_STRIKE_ANGLE_DEG)
+        horiz = strike_dir_2d / np.linalg.norm(strike_dir_2d)
+        strike_dir_3d = np.array([
+            horiz[0] * np.cos(angle_rad),
+            horiz[1] * np.cos(angle_rad),
+            -np.sin(angle_rad)
+        ])
+        strike_dir_3d = strike_dir_3d / np.linalg.norm(strike_dir_3d)
 
-    T_current = controller.get_current_T()
-    q_current = controller.get_current_q()
+        T_current = controller.get_current_T()
+        q_current = controller.get_current_q()
 
-    ball_h = cue_pos[2]
-    trajectory, phases = traj_planner.plan_strike(
-        T_current=T_current, ball_pos=cue_pos,
-        strike_direction=strike_dir_3d, strike_speed=strike_speed,
-        approach_dist=STRIKE_APPROACH_DIST, follow_dist=STRIKE_FOLLOW_DIST,
-        strike_height=ball_h, tool_offset=tool_offset
-    )
+        ball_h = cue_pos[2]
+        trajectory, phases = traj_planner.plan_strike(
+            T_current=T_current, ball_pos=cue_pos,
+            strike_direction=strike_dir_3d, strike_speed=strike_speed,
+            approach_dist=STRIKE_APPROACH_DIST, follow_dist=STRIKE_FOLLOW_DIST,
+            strike_height=ball_h, tool_offset=tool_offset
+        )
 
-    q_traj = controller.ik.solve_trajectory(q_current, trajectory)
+        q_traj = controller.ik.solve_trajectory(q_current, trajectory)
 
     dt = 0.002
     times = np.arange(len(trajectory)) * dt
@@ -195,9 +216,9 @@ def _generate_maze_plots(controller, env, planner, traj_planner,
     save_dir = os.path.dirname(os.path.abspath(__file__))
     phase_colors = {'approach': '#3498db', 'strike': '#e74c3c', 'follow': '#2ecc71'}
 
-    # ── Figure 1: Joint Angles ──
+    # ?? Figure 1: Joint Angles ??
     fig1, axes = plt.subplots(3, 2, figsize=(14, 10))
-    fig1.suptitle('3-CUSHION — Joint Angles vs Time', fontsize=16, fontweight='bold')
+    fig1.suptitle('3-CUSHION ??Joint Angles vs Time', fontsize=16, fontweight='bold')
     for i, ax in enumerate(axes.flat):
         q_deg = np.degrees(joint_angles[:, i])
         for phase_name, (start, end) in phases.items():
@@ -213,9 +234,9 @@ def _generate_maze_plots(controller, env, planner, traj_planner,
     plt.close(fig1)
     print(f"  Saved: {path1}")
 
-    # ── Figure 2: Task Space XYZ ──
+    # ?? Figure 2: Task Space XYZ ??
     fig2, axes2 = plt.subplots(3, 1, figsize=(14, 8), sharex=True)
-    fig2.suptitle('3-CUSHION — EE Position vs Time', fontsize=16, fontweight='bold')
+    fig2.suptitle('3-CUSHION ??EE Position vs Time', fontsize=16, fontweight='bold')
     labels = ['X (m)', 'Y (m)', 'Z (m)']
     for i, ax in enumerate(axes2):
         for phase_name, (start, end) in phases.items():
@@ -233,10 +254,10 @@ def _generate_maze_plots(controller, env, planner, traj_planner,
     plt.close(fig2)
     print(f"  Saved: {path2}")
 
-    # ── Figure 3: 3D Trajectory ──
+    # ?? Figure 3: 3D Trajectory ??
     fig3 = plt.figure(figsize=(10, 8))
     ax3 = fig3.add_subplot(111, projection='3d')
-    ax3.set_title('3-CUSHION — 3D EE Trajectory', fontsize=14, fontweight='bold')
+    ax3.set_title('3-CUSHION ??3D EE Trajectory', fontsize=14, fontweight='bold')
     for phase_name, (start, end) in phases.items():
         ax3.plot(task_positions[start:end, 0], task_positions[start:end, 1],
                  task_positions[start:end, 2],
@@ -253,10 +274,10 @@ def _generate_maze_plots(controller, env, planner, traj_planner,
     plt.close(fig3)
     print(f"  Saved: {path3}")
 
-    # ── Figure 4: 공 궤적 (2D 평면) ──
+    # ?? Figure 4: 怨?沅ㅼ쟻 (2D ?됰㈃) ??
     if best.get('ball_path') and len(best['ball_path']) > 1:
         fig4, ax4 = plt.subplots(figsize=(10, 7))
-        ax4.set_title('3-CUSHION — Planned Ball Trajectory (Headless PyBullet)',
+        ax4.set_title('3-CUSHION ??Planned Ball Trajectory (Headless PyBullet)',
                        fontsize=14, fontweight='bold')
 
         ball_path = np.array(best['ball_path'])
@@ -264,18 +285,35 @@ def _generate_maze_plots(controller, env, planner, traj_planner,
         ax4.scatter(ball_path[0, 0], ball_path[0, 1], color='white', edgecolor='black',
                     s=150, zorder=5, label='Cue start')
 
+        def _plot_moving_path(path, color, label):
+            if path is None or len(path) <= 1:
+                return
+            pts = np.array(path)
+            if pts.ndim != 2 or pts.shape[1] < 2:
+                return
+            xy = pts[:, :2]
+            keep = np.ones(len(xy), dtype=bool)
+            if len(xy) > 1:
+                keep[1:] = np.linalg.norm(np.diff(xy, axis=0), axis=1) > 0.003
+            xy = xy[keep]
+            if len(xy) > 1:
+                ax4.plot(xy[:, 0], xy[:, 1], color=color, linewidth=2,
+                         linestyle='--', label=label)
+
+        _plot_moving_path(best.get('tgt1_path'), 'gold', 'Target 1 path')
+        _plot_moving_path(best.get('tgt2_path'), 'red', 'Target 2 path')
+
         ax4.scatter(target_pos[0], target_pos[1], color='gold', edgecolor='black',
                     s=150, zorder=5, label='Target 1')
         if ball2_pos is not None:
             ax4.scatter(ball2_pos[0], ball2_pos[1], color='red', edgecolor='black',
                         s=150, zorder=5, label='Target 2')
 
-        # 장애물
         for ox, oy, orr in obstacles:
             circle = plt.Circle((ox, oy), orr, color='gray', alpha=0.5)
             ax4.add_patch(circle)
 
-        # 테이블 경계
+        # ?뚯씠釉?寃쎄퀎
         b = env.table_bounds
         rect = plt.Rectangle((b['x_min'], b['y_min']),
                               b['x_max']-b['x_min'], b['y_max']-b['y_min'],
@@ -288,10 +326,14 @@ def _generate_maze_plots(controller, env, planner, traj_planner,
         ax4.legend(fontsize=10)
         ax4.grid(True, alpha=0.3)
 
-        info_text = (f"Score: {best['score']:.0f}  |  "
-                     f"Cushions: {best['cushion_count']}  |  "
-                     f"Hit T1: {best['hit_t1']}  |  Hit T2: {best['hit_t2']}")
-        ax4.set_xlabel(info_text, fontsize=11)
+        events = best.get('events', [])
+        valid_3c = best.get('valid_3cushion', best.get('score', 0) >= 3000)
+        info_text = (f"Score: {best['score']:.0f}  |  Valid3C: {valid_3c}  |  "
+                     f"Cushions: {best.get('cushion_count', 0)}  |  "
+                     f"Hit T1: {best.get('hit_t1')}  |  Hit T2: {best.get('hit_t2')}\n"
+                     f"Speed raw/used: {best.get('input_speed_raw', strike_speed):.3f}/"
+                     f"{best.get('ee_speed_used', strike_speed):.3f} m/s  |  Events: {events}")
+        ax4.set_xlabel(info_text, fontsize=10)
 
         fig4.tight_layout()
         path4 = os.path.join(save_dir, 'plot_ball_trajectory_maze.png')
@@ -301,12 +343,12 @@ def _generate_maze_plots(controller, env, planner, traj_planner,
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='쓰리쿠션 당구 시뮬레이션')
-    parser.add_argument('--obstacles', type=int, default=0, help='장애물 개수 (기본: 0)')
-    parser.add_argument('--attempts', type=int, default=3, help='시도 횟수 (기본: 3)')
-    parser.add_argument('--view-time', type=int, default=15, help='결과 확인 시간 (초)')
-    parser.add_argument('--seed', type=int, default=None, help='장애물 랜덤 시드')
-    parser.add_argument('--no-plot', action='store_true', help='플롯 생성 생략')
+    parser = argparse.ArgumentParser(description='3-cushion maze simulation')
+    parser.add_argument('--obstacles', type=int, default=0, help='number of obstacles (default: 0)')
+    parser.add_argument('--attempts', type=int, default=3, help='number of attempts (default: 3)')
+    parser.add_argument('--view-time', type=int, default=15, help='result viewing time in seconds')
+    parser.add_argument('--seed', type=int, default=None, help='obstacle random seed')
+    parser.add_argument('--no-plot', action='store_true', help='skip plot generation')
     args = parser.parse_args()
 
     run_maze(

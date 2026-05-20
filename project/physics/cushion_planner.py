@@ -183,11 +183,14 @@ class CushionShotPlanner:
         for _ in range(50):
             p.stepSimulation(physicsClientId=sim)
 
-        # 탐색: 어닐링
-        n_initial = ANNEAL_N_INITIAL
+        # Grid Search: 0 ~ 360도를 0.5도 간격으로 촘촘하게 탐색
+        n_initial = 720
         speed_lo, speed_hi = ANNEAL_SPEED_RANGE
-        angles = np.random.uniform(0, 2 * np.pi, n_initial)
-        speeds = np.random.uniform(speed_lo, speed_hi, n_initial)
+        # 도구 질량(0.15)이 공 질량(0.01)보다 훨씬 커서, 툴 속도의 약 1.8배로 공이 튕겨나감
+        # 따라서 공의 최대 탐색 속도를 MAX_TOOL_SPEED로 제한하면 안 됨!
+        speed_hi = min(speed_hi, MAX_TOOL_SPEED * 1.8)
+        angles = np.linspace(0, 2 * np.pi, n_initial, endpoint=False)
+        speeds = np.full(n_initial, speed_hi)
 
         results = []
         for i in range(n_initial):
@@ -475,7 +478,7 @@ class CushionShotPlanner:
 
         # SE3 계산 — 도구 끝이 공 중심을 향함
         ball_pos = np.array(cue_start)
-        impact_ee = ball_pos - strike_dir * TOOL_HEAD_LENGTH  # tip이 ball center에 도달
+        impact_ee = ball_pos - strike_dir * (TOOL_HEAD_LENGTH + 0.012)  # tip이 ball surface에 도달
         ready_ee = impact_ee - strike_dir * STRIKE_APPROACH_DIST
         follow_ee = impact_ee + strike_dir * STRIKE_FOLLOW_DIST
 
@@ -529,11 +532,16 @@ class CushionShotPlanner:
         q_prev = q_ready.copy()
         q_traj, qdot_traj = [], []
         for T in full_traj:
-            q_prev = ik_solver.solve_step(q_prev, T)
+            for _ in range(5):
+                q_prev = ik_solver.solve_step(q_prev, T)
             q_traj.append(q_prev.copy())
         for k in range(len(q_traj)):
             qdot_traj.append((q_traj[k+1] - q_traj[k]) / sim_dt if k < len(q_traj)-1
                              else np.zeros_like(q_traj[0]))
+        qddot_traj = []
+        for k in range(len(qdot_traj)):
+            qddot_traj.append((qdot_traj[k+1] - qdot_traj[k]) / sim_dt if k < len(qdot_traj)-1
+                              else np.zeros_like(qdot_traj[0]))
 
         # 경로 기록 초기화 (strike 전부터 기록 시작)
         hit_t1, hit_t2, cushion_contacts = False, False, 0
@@ -551,7 +559,7 @@ class CushionShotPlanner:
                       for j in movable_joints]
             q = np.array([s[0] for s in states]).reshape(-1, 1)
             qdot = np.array([s[1] for s in states]).reshape(-1, 1)
-            tau = pin_model.M(q) @ (5000*(q_traj[step_i]-q) + 200*(qdot_traj[step_i]-qdot)) + \
+            tau = pin_model.M(q) @ (qddot_traj[step_i] + 5000*(q_traj[step_i]-q) + 200*(qdot_traj[step_i]-qdot)) + \
                   pin_model.C(q, qdot) @ qdot + pin_model.g(q)
             p.setJointMotorControlArray(robot_id, movable_joints, p.TORQUE_CONTROL,
                                         forces=list(tau.flatten()), physicsClientId=sim_id)
@@ -572,6 +580,7 @@ class CushionShotPlanner:
                     if len(p.getContactPoints(bodyA=tool_id, bodyB=cue_id,
                                               physicsClientId=sim_id)) > 0:
                         contact_step = step_i
+                        print(f'      [Headless DIAG] Contact at step {step_i}/{len(q_traj)}')
                 elif step_i - contact_step >= 10:
                     p.setCollisionFilterPair(tool_id, cue_id, -1, -1, 0,
                                             physicsClientId=sim_id)
@@ -642,23 +651,11 @@ class CushionShotPlanner:
         if events and hit_t1 and hit_t2:
             t1_idx = events.index('t1')
             t2_idx = events.index('t2')
-            # t1과 t2 사이의 쿠션 수
-            cushions_between = events[t1_idx+1:t2_idx].count('c')
-            # t1 이전의 쿠션 수
-            cushions_before_t1 = events[:t1_idx].count('c')
-            # 일반: t1 먼저, 그 후 쿠션 3+ 후 t2
-            if t1_idx < t2_idx and cushions_between >= 3:
-                valid_3cushion = True
-            # 뱅크: 쿠션 3+ 먼저, 그 후 두 적구
-            elif cushions_before_t1 >= 3:
-                valid_3cushion = True
-            # 뱅크 (t2 먼저): 쿠션 3+ 먼저, t2 후 t1
-            elif t2_idx < t1_idx:
-                cushions_before_t2 = events[:t2_idx].count('c')
-                cushions_between_rev = events[t2_idx+1:t1_idx].count('c')
-                if cushions_before_t2 >= 3:
+            if t1_idx < t2_idx:
+                if events[:t2_idx].count('c') >= 3:
                     valid_3cushion = True
-                elif cushions_between_rev >= 3:
+            else:
+                if events[:t1_idx].count('c') >= 3:
                     valid_3cushion = True
 
         if valid_3cushion:
