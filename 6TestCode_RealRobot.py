@@ -137,8 +137,23 @@ def replay_trajectory_on_real(traj_SE3, phases=None, label="", strike_speed=1.0)
     T_follow_end = traj_SE3[min(follow_end - 1, len(traj_SE3) - 1)]
     p_target = SE3_to_p6(T_follow_end)
 
+    # --- 진단 출력 ---
     p_now = indy.get_control_data()['p']
-    dist_mm = np.linalg.norm(np.array(p_now[:3]) - np.array(p_target[:3]))
+    strike_vec = np.array(p_target[:3]) - np.array(p_now[:3])
+    strike_dist = np.linalg.norm(strike_vec)
+    strike_dir_actual = strike_vec / strike_dist if strike_dist > 1e-3 else strike_vec
+    print(f"  [{label}] === STRIKE DIAG ===")
+    print(f"    Ready  CMD : [{p_ready[0]:.1f}, {p_ready[1]:.1f}, {p_ready[2]:.1f}] mm")
+    print(f"    Ready  ACT : [{p_now[0]:.1f}, {p_now[1]:.1f}, {p_now[2]:.1f}] mm")
+    print(f"    Target CMD : [{p_target[0]:.1f}, {p_target[1]:.1f}, {p_target[2]:.1f}] mm")
+    print(f"    Strike dir : [{strike_dir_actual[0]:.3f}, {strike_dir_actual[1]:.3f}, {strike_dir_actual[2]:.3f}]")
+    print(f"    Strike dist: {strike_dist:.1f} mm")
+    print(f"    Ready  eul : [{p_ready[3]:.1f}, {p_ready[4]:.1f}, {p_ready[5]:.1f}] deg")
+    print(f"    Target eul : [{p_target[3]:.1f}, {p_target[4]:.1f}, {p_target[5]:.1f}] deg")
+    print(f"    Actual eul : [{p_now[3]:.1f}, {p_now[4]:.1f}, {p_now[5]:.1f}] deg")
+    print(f"  ==================")
+
+    dist_mm = strike_dist
     if dist_mm < MOVEL_MIN_DIST_MM:
         print(f"  [{label}] movel 거리 {dist_mm:.1f}mm < {MOVEL_MIN_DIST_MM}mm -- 건너뜀")
     else:
@@ -146,6 +161,8 @@ def replay_trajectory_on_real(traj_SE3, phases=None, label="", strike_speed=1.0)
         print(f"  [{label}] Phase 2: MoveL Strike! vel={vel_pct:.0f}%, dist={dist_mm:.0f}mm")
         indy.movel(list(p_target), vel_ratio=vel_pct, acc_ratio=100)
         wait_indy()
+        p_after = indy.get_control_data()['p']
+        print(f"    After strike: [{p_after[0]:.1f}, {p_after[1]:.1f}, {p_after[2]:.1f}] mm")
         verify_movel_reached(p_target)
         print(f"  [{label}] Strike 완료!")
 
