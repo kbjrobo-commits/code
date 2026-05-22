@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # %% [markdown]
-# # 6. Real Robot Test — 시뮬 궤적을 실제 로봇이 따라하는지 확인
+# # 6. Real Robot Test -- 시뮬 궤적을 실제 로봇이 따라하는지 확인
 #
 # **흐름:**
-# 1. 시뮬(GUI)에서 전체 라운드 실행 → 타격 결과 관찰
+# 1. 시뮬(GUI)에서 전체 라운드 실행 -> 타격 결과 관찰
 # 2. 저장된 궤적을 실제 로봇이 라운드별로 재생 (타격 포함)
 #
 # **미니골프: 1라운드 / 빌리아드: 3라운드**
@@ -36,7 +36,7 @@ print(f"실제 로봇 연결: {ROBOT_IP}")
 print(f"현재 q(deg): {[round(x,1) for x in indy.get_control_data()['q']]}")
 
 # %% Step 5: 헬퍼 함수
-# ── 타이밍/전환 상수 ──
+# -- 타이밍/전환 상수 --
 MOVEL_MIN_DIST_MM      = 3.0  # movel 최소 이동 거리 (mm)
 
 
@@ -62,7 +62,7 @@ def movej_both(q_deg, wait=True):
 
 
 def verify_movel_reached(p_target, tolerance_mm=5.0):
-    """movel 목표 도달 여부 검증 — 안 됐으면 재시도"""
+    """movel 목표 도달 여부 검증 -- 안 됐으면 재시도"""
     p_now = indy.get_control_data()['p']
     err_mm = np.linalg.norm(np.array(p_now[:3]) - np.array(p_target[:3]))
     if err_mm > tolerance_mm:
@@ -82,12 +82,12 @@ def SE3_to_p6(T):
 
 
 def replay_trajectory_on_real(traj_SE3, phases=None, label="", strike_speed=1.0):
-    """SE3 궤적을 실제 로봇에서 재생 — 전구간 MoveL
+    """SE3 궤적을 실제 로봇에서 재생 -- 전구간 MoveL
 
     Phase 1 (Approach):  waypoint별 MoveL로 안전 접근 (vel=20%)
-    Phase 1.5 (Align):   Ready 위치에서 정지 → 정밀 정렬 movel
+    Phase 1.5 (Align):   Ready 위치에서 정지 -> 정밀 정렬 movel
     Phase 2 (Strike):    단일 MoveL 풀스윙 (vel=strike_speed%)
-    Phase 3 (Retract):   수직 상승 movel → Home movej
+    Phase 3 (Retract):   수직 상승 movel -> Home movej
     """
     if phases is None:
         phases = {'approach': (0, len(traj_SE3)),
@@ -121,7 +121,7 @@ def replay_trajectory_on_real(traj_SE3, phases=None, label="", strike_speed=1.0)
     # ======== Phase 1.5: Align (정지 + 정밀 정렬) ========
     T_ready = traj_SE3[approach_end - 1]
     p_ready = SE3_to_p6(T_ready)
-    print(f"  [{label}] Phase 1.5: Align — 정지 후 정밀 정렬")
+    print(f"  [{label}] Phase 1.5: Align -- 정지 후 정밀 정렬")
     time.sleep(1.0)  # 1초 정지 (진동 안정화)
     indy.movel(list(p_ready), vel_ratio=10, acc_ratio=30)  # 느리고 정밀하게
     wait_indy()
@@ -136,7 +136,7 @@ def replay_trajectory_on_real(traj_SE3, phases=None, label="", strike_speed=1.0)
     p_now = indy.get_control_data()['p']
     dist_mm = np.linalg.norm(np.array(p_now[:3]) - np.array(p_target[:3]))
     if dist_mm < MOVEL_MIN_DIST_MM:
-        print(f"  [{label}] movel 거리 {dist_mm:.1f}mm < {MOVEL_MIN_DIST_MM}mm — 건너뜀")
+        print(f"  [{label}] movel 거리 {dist_mm:.1f}mm < {MOVEL_MIN_DIST_MM}mm -- 건너뜀")
     else:
         vel_pct = np.clip(strike_speed / MAX_TOOL_SPEED * 100, 10, 100)
         print(f"  [{label}] Phase 2: MoveL Strike! vel={vel_pct:.0f}%, dist={dist_mm:.0f}mm")
@@ -233,7 +233,7 @@ robot._compute_torque_input = _boosted
 time.sleep(3)
 print(f"환경 세팅 완료 (도구 안정화 3초 대기)")
 
-# %% Step 9: ★★★ 시뮬에서 전체 라운드 실행 (GUI로 관찰) ★★★
+# %% Step 9: *** 시뮬에서 전체 라운드 실행 (GUI로 관찰) ***
 traj_planner = StrikeTrajectoryPlanner(approach_duration=3.0, dt=0.002)
 saved_trajectories = []
 
@@ -345,7 +345,7 @@ for rnd in range(1, NUM_ROUNDS + 1):
     if hasattr(pb.my_robot, '_qdot_des'):
         pb.my_robot._qdot_des = np.zeros([6, 1])
 
-    # ★ 임팩트 후 도구-큐볼 충돌 즉시 비활성화 ★
+    # * 임팩트 후 도구-큐볼 충돌 즉시 비활성화 *
     # Headless planner는 충돌 후 도구를 제거하므로, GUI에서도 동일하게
     # 도구가 공 궤적에 간섭하지 않도록 비활성화
     if hasattr(env, 'tool_id') and hasattr(env, 'cue_ball_id'):
@@ -391,8 +391,8 @@ print(f"  SIM 완료! 궤적 {len(saved_trajectories)}개 저장됨")
 print(f"  다음 셀에서 실제 로봇 재생")
 print(f"{'='*50}")
 
-# %% Step 10: ★★★ 실제 로봇 — 라운드 재생 (루프) ★★★
-# ⚠️ E-Stop 버튼에 손 올리고 실행!
+# %% Step 10: *** 실제 로봇 -- 라운드 재생 (루프) ***
+# [!] E-Stop 버튼에 손 올리고 실행!
 for rnd_idx, (traj, phs) in enumerate(saved_trajectories):
     rnd_num = rnd_idx + 1
     print("=" * 50)
@@ -417,5 +417,5 @@ print("완료! 시뮬 연결 해제됨")
 # | Standstill Failed | `indy.recover()` |
 # | 로봇 안 움직임 | Conty에서 서보 ON 확인 |
 # | neuromeka import 실패 | `pip install neuromeka` |
-# | movel 타격이 안됨 | teleop→task 전환 대기 1.5초 확인 |
+# | movel 타격이 안됨 | teleop->task 전환 대기 1.5초 확인 |
 # | movel 속도 부족 | STRIKE_APPROACH_DIST 증가 (가속 거리 확보) |
