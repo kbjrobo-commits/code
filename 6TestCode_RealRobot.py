@@ -36,10 +36,6 @@ print(f"현재 q(deg): {[round(x,1) for x in indy.get_control_data()['q']]}")
 
 # %% Step 5: 헬퍼 함수
 # ── 타이밍/전환 상수 ──
-TELEOP_STOP_SETTLE_SEC = 1.5   # teleop 종료 후 task 모드 전환 대기
-TELEOP_APPROACH_DT     = 0.002 # teleop 스트리밍 주기
-TELEOP_SKIP_INTERVAL   = 50   # teleop 포인트 스킵 간격
-TELEOP_VEL_RATIO       = 0.3  # teleop 접근 속도 비율
 MOVEL_MIN_DIST_MM      = 3.0  # movel 최소 이동 거리 (mm)
 
 
@@ -76,56 +72,66 @@ def verify_movel_reached(p_target, tolerance_mm=5.0):
     return True
 
 
+def SE3_to_p6(T):
+    """SE3(4x4) → [x_mm, y_mm, z_mm, rx, ry, rz] (Euler XYZ deg)"""
+    p = np.zeros(6)
+    p[0:3] = 1000 * T[0:3, 3]
+    p[3:6] = Rot2eul(T[0:3, 0:3], seq='XYZ', degree=True)
+    return p
+
+
 def replay_trajectory_on_real(traj_SE3, phases=None, label="", strike_speed=1.0):
-    """SE3 궤적을 실제 로봇에서 재생 (개선된 3-phase)
+    """SE3 궤적을 실제 로봇에서 재생 — 전구간 MoveL
 
-    Phase 1 (Approach): Teleop으로 천천히 준비 위치까지 이동
-    Phase 2 (Strike):   Teleop 종료 → 안정화 대기 → 단일 MoveL 풀스윙
-    Phase 3 (Retract):  수직 상승 후 Home 복귀
-
-    개선 사항:
-    - teleop→task 모드 전환 대기 1.5초 (0.5초→)
-    - movel 목표를 follow-through 끝점이 아닌 연장 지점으로 설정 (감속 전 관통)
-    - movel 후 위치 검증 → 미도달 시 재시도
-    - 즉시 상승으로 공 궤적 간섭 방지
+    Phase 1 (Approach):  waypoint별 MoveL로 안전 접근 (vel=20%)
+    Phase 1.5 (Align):   Ready 위치에서 정지 → 정밀 정렬 movel
+    Phase 2 (Strike):    단일 MoveL 풀스윙 (vel=strike_speed%)
+    Phase 3 (Retract):   수직 상승 movel → Home movej
     """
     if phases is None:
         phases = {'approach': (0, len(traj_SE3)),
                   'strike': (len(traj_SE3), len(traj_SE3)),
                   'follow': (len(traj_SE3), len(traj_SE3))}
 
+    approach_start = phases['approach'][0]
     approach_end = phases['approach'][1]
     follow_end = phases['follow'][1] if phases['follow'][1] > 0 else len(traj_SE3)
-    
-    # ======== Phase 1: Approach (Teleop — 천천히) ========
-    print(f"  [{label}] Phase 1: Teleop Approach ({approach_end} pts)...")
-    indy.start_teleop(0)
-    time.sleep(1)
-    
-    for idx in range(0, approach_end):
-        if idx % TELEOP_SKIP_INTERVAL != 0 and idx != approach_end - 1:
-            continue
-        T_des = traj_SE3[idx]
-        p_des = np.zeros(6)
-        p_des[0:3] = 1000 * T_des[0:3, 3]
-        p_des[3:6] = Rot2eul(T_des[0:3, 0:3], seq='XYZ', degree=True)
-        indy.movetelel_abs(p_des, vel_ratio=TELEOP_VEL_RATIO, acc_ratio=1)
-        time.sleep(TELEOP_APPROACH_DT * TELEOP_SKIP_INTERVAL)
-    
-    # Teleop 종료 + 안정화 대기 (핵심: 1.5초로 연장)
-    time.sleep(0.5)
-    indy.stop_teleop()
-    time.sleep(TELEOP_STOP_SETTLE_SEC)
-    print(f"  [{label}] Approach 완료 — 준비 위치 도달")
-    
-    # ======== Phase 2: Strike (단일 MoveL — 풀스윙) ========
-    # Follow-through 끝점 계산
-    T_follow_end = traj_SE3[min(follow_end - 1, len(traj_SE3) - 1)]
-    p_target = np.zeros(6)
-    p_target[0:3] = 1000 * T_follow_end[0:3, 3]
-    p_target[3:6] = Rot2eul(T_follow_end[0:3, 0:3], seq='XYZ', degree=True)
 
-    # 현재 위치와의 거리 확인 — 너무 가까우면 연장
+    # ======== Phase 1: Approach (MoveL waypoints) ========
+    # 궤적을 APPROACH_MOVEL_STEP 간격으로 샘플링
+    APPROACH_MOVEL_STEP = 100  # 100 waypoints마다 1개 = 0.2초 간격
+    APPROACH_VEL = 20          # 접근 속도 20%
+    APPROACH_ACC = 50          # 접근 가속도 50%
+
+    waypoint_indices = list(range(approach_start, approach_end, APPROACH_MOVEL_STEP))
+    if waypoint_indices[-1] != approach_end - 1:
+        waypoint_indices.append(approach_end - 1)
+
+    print(f"  [{label}] Phase 1: MoveL Approach ({len(waypoint_indices)} waypoints)...")
+    for wi, idx in enumerate(waypoint_indices):
+        p_des = SE3_to_p6(traj_SE3[idx])
+        indy.movel(list(p_des), vel_ratio=APPROACH_VEL, acc_ratio=APPROACH_ACC)
+        wait_indy()
+        if wi % 5 == 0:
+            print(f"    waypoint {wi+1}/{len(waypoint_indices)}")
+
+    print(f"  [{label}] Approach 완료")
+
+    # ======== Phase 1.5: Align (정지 + 정밀 정렬) ========
+    T_ready = traj_SE3[approach_end - 1]
+    p_ready = SE3_to_p6(T_ready)
+    print(f"  [{label}] Phase 1.5: Align — 정지 후 정밀 정렬")
+    time.sleep(1.0)  # 1초 정지 (진동 안정화)
+    indy.movel(list(p_ready), vel_ratio=10, acc_ratio=30)  # 느리고 정밀하게
+    wait_indy()
+    verify_movel_reached(p_ready, tolerance_mm=2.0)
+    time.sleep(0.5)  # 정렬 후 추가 안정화
+    print(f"  [{label}] Ready 위치 정렬 완료")
+
+    # ======== Phase 2: Strike (단일 MoveL 풀스윙) ========
+    T_follow_end = traj_SE3[min(follow_end - 1, len(traj_SE3) - 1)]
+    p_target = SE3_to_p6(T_follow_end)
+
     p_now = indy.get_control_data()['p']
     dist_mm = np.linalg.norm(np.array(p_now[:3]) - np.array(p_target[:3]))
     if dist_mm < MOVEL_MIN_DIST_MM:
@@ -133,22 +139,18 @@ def replay_trajectory_on_real(traj_SE3, phases=None, label="", strike_speed=1.0)
     else:
         vel_pct = np.clip(strike_speed / MAX_TOOL_SPEED * 100, 10, 100)
         print(f"  [{label}] Phase 2: MoveL Strike! vel={vel_pct:.0f}%, dist={dist_mm:.0f}mm")
-        print(f"    Target: [{p_target[0]:.1f}, {p_target[1]:.1f}, {p_target[2]:.1f}] mm")
-        
         indy.movel(list(p_target), vel_ratio=vel_pct, acc_ratio=100)
         wait_indy()
         verify_movel_reached(p_target)
         print(f"  [{label}] Strike 완료!")
-    
-    # ======== Phase 3: 수직 상승 후퇴 ========
+
+    # ======== Phase 3: Retract (수직 상승 + Home) ========
     T_lift = T_follow_end.copy()
     T_lift[2, 3] += RETRACT_HEIGHT
-    p_lift = np.zeros(6)
-    p_lift[0:3] = 1000 * T_lift[0:3, 3]
-    p_lift[3:6] = Rot2eul(T_lift[0:3, 0:3], seq='XYZ', degree=True)
-    
+    p_lift = SE3_to_p6(T_lift)
+
     print(f"  [{label}] Phase 3: Vertical lift + Home")
-    indy.movel(p_lift, vel_ratio=30, acc_ratio=100)
+    indy.movel(list(p_lift), vel_ratio=30, acc_ratio=100)
     wait_indy()
     verify_movel_reached(p_lift)
     print(f"  [{label}] 전체 완료")
