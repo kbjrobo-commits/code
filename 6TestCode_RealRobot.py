@@ -92,13 +92,13 @@ def SE3_to_p6(T):
     return p
 
 
-def replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, label="", strike_speed=1.0):
+def replay_trajectory_on_real(q_traj_deg, q_strike_wps, q_lift_deg, phases, label="", strike_speed=1.0):
     """관절 각도 궤적을 실제 로봇에서 재생 -- 전구간 MoveJ
 
     Phase 1 (Approach):  waypoint별 MoveJ로 안전 접근 (vel=20%)
     Phase 1.5 (Align):   Ready 위치에서 정지 -> 정밀 정렬
-    Phase 2 (Strike):    단일 MoveJ 풀스윙 (vel=100%)
-    Phase 3 (Retract):   Home movej
+    Phase 2 (Strike):    Strike waypoint별 MoveJ (vel=100%)
+    Phase 3 (Retract):   수직 상승 + Home movej
     """
     approach_start = phases['approach'][0]
     approach_end = phases['approach'][1]
@@ -139,19 +139,22 @@ def replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, label="", strike
     print(f"    Ready q_err: {q_err:.3f} deg")
     print(f"    Ready ACT pos: [{p_now[0]:.1f}, {p_now[1]:.1f}, {p_now[2]:.1f}] mm")
     print(f"    Ready ACT eul: [{p_now[3]:.1f}, {p_now[4]:.1f}, {p_now[5]:.1f}] deg")
-    print(f"    Follow q_target: {[f'{x:.1f}' for x in q_follow_deg]}")
+    print(f"    Strike waypoints: {len(q_strike_wps)}개")
     print(f"  ==================")
 
-    # ======== Phase 2: Strike (단일 MoveJ 풀스윙) ========
-    print(f"  [{label}] Phase 2: MoveJ Strike! vel=100%")
-    indy.movej(list(q_follow_deg), vel_ratio=100, acc_ratio=300)
-    wait_indy()
+    # ======== Phase 2: Strike (waypoint별 MoveJ) ========
+    print(f"  [{label}] Phase 2: MoveJ Strike ({len(q_strike_wps)} waypoints)! vel=100%")
+    for si, q_sw in enumerate(q_strike_wps[1:], 1):  # 첫번째는 q_ready와 동일, skip
+        indy.movej(list(q_sw), vel_ratio=100, acc_ratio=300)
+        wait_indy()
     p_after = indy.get_control_data()['p']
     print(f"    After strike: [{p_after[0]:.1f}, {p_after[1]:.1f}, {p_after[2]:.1f}] mm")
     print(f"  [{label}] Strike 완료!")
 
-    # ======== Phase 3: Retract (Home) ========
-    print(f"  [{label}] Phase 3: Home")
+    # ======== Phase 3: Retract (수직 상승 + Home) ========
+    print(f"  [{label}] Phase 3: Lift + Home")
+    indy.movej(list(q_lift_deg), vel_ratio=30, acc_ratio=100)
+    wait_indy()
     indy.movej(HOME_Q_DEG, vel_ratio=30, acc_ratio=100)
     wait_indy()
     print(f"  [{label}] 전체 완료")
@@ -353,6 +356,18 @@ for rnd in range(1, NUM_ROUNDS + 1):
     if hasattr(pb.my_robot, '_qdot_des'):
         pb.my_robot._qdot_des = np.zeros([6, 1])
 
+    # Strike 구간 IK waypoints 생성 (직선 경로 보장)
+    strike_start_idx = phases['approach'][1] - 1
+    strike_end_idx = min(phases['follow'][1] - 1, len(trajectory) - 1)
+    N_STRIKE_WP = 10  # strike 구간을 10개 waypoint로 분할
+    strike_indices = np.linspace(strike_start_idx, strike_end_idx, N_STRIKE_WP + 1, dtype=int)
+    q_strike_chain = [q_ready.copy()]
+    for si in strike_indices[1:]:
+        q_step = ik.solve_step(q_strike_chain[-1], trajectory[si])
+        q_strike_chain.append(q_step)
+    q_strike_chain_deg = [np.degrees(q) for q in q_strike_chain]
+    print(f"  Strike waypoints: {len(q_strike_chain_deg)}개 생성")
+
     # * 임팩트 후 도구-큐볼 충돌 즉시 비활성화 *
     # Headless planner는 충돌 후 도구를 제거하므로, GUI에서도 동일하게
     # 도구가 공 궤적에 간섭하지 않도록 비활성화
@@ -364,6 +379,7 @@ for rnd in range(1, NUM_ROUNDS + 1):
     T_lift = trajectory[-1].copy()
     T_lift[2, 3] += RETRACT_HEIGHT
     q_lift = ik.solve_step(q_follow, T_lift)
+    q_lift_deg = np.degrees(q_lift)
     pb.MoveRobot(q_lift, degree=False)
     time.sleep(0.3)
 
@@ -389,10 +405,9 @@ for rnd in range(1, NUM_ROUNDS + 1):
         success = env.is_pocketed()
         print(f"  결과: {'POCKETED!' if success else 'miss'}")
 
-    # 궤적 + 관절각도 + phases 저장, 홈 복귀
-    q_traj_deg = np.degrees(q_traj)  # rad -> deg
-    q_follow_deg = np.degrees(q_follow)
-    saved_trajectories.append((q_traj_deg, q_follow_deg, phases))
+    # 궤적 저장: approach q_traj + strike waypoints + lift + phases
+    q_traj_deg = np.degrees(q_traj)  # approach 구간 rad -> deg
+    saved_trajectories.append((q_traj_deg, q_strike_chain_deg, q_lift_deg, phases))
     pb.MoveRobot(HOME_Q_DEG, degree=True)
     time.sleep(1)
 
@@ -403,7 +418,7 @@ print(f"{'='*50}")
 
 # %% Step 10: *** 실제 로봇 -- 라운드 재생 (루프) ***
 # [!] E-Stop 버튼에 손 올리고 실행!
-for rnd_idx, (q_traj_d, q_follow_d, phs) in enumerate(saved_trajectories):
+for rnd_idx, (q_traj_d, q_strike_wps, q_lift_d, phs) in enumerate(saved_trajectories):
     rnd_num = rnd_idx + 1
     print("=" * 50)
     print(f"  REAL Round {rnd_num}/{len(saved_trajectories)} 재생")
@@ -411,7 +426,7 @@ for rnd_idx, (q_traj_d, q_follow_d, phs) in enumerate(saved_trajectories):
     movej_both(HOME_Q_DEG, wait=True)
     time.sleep(1)
     try:
-        replay_trajectory_on_real(q_traj_d, q_follow_d, phs, label=f"Round {rnd_num}")
+        replay_trajectory_on_real(q_traj_d, q_strike_wps, q_lift_d, phs, label=f"Round {rnd_num}")
     except Exception as e:
         print(f"  [!] Round {rnd_num} 오류: {e}")
         try:
