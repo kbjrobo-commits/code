@@ -73,10 +73,14 @@ def verify_movel_reached(p_target, tolerance_mm=5.0):
     return True
 
 
+# FK 보정 오프셋 (Step 6에서 계산됨)
+FK_OFFSET_MM = np.zeros(3)
+
 def SE3_to_p6(T):
-    """SE3(4x4) -> [x_mm, y_mm, z_mm, rx, ry, rz] (Euler XYZ deg)"""
+    """SE3(4x4) -> [x_mm, y_mm, z_mm, rx, ry, rz] (Euler XYZ deg)
+    FK_OFFSET_MM 보정 적용: Pinocchio 좌표 -> 실제 로봇 좌표"""
     p = np.zeros(6)
-    p[0:3] = 1000 * T[0:3, 3]
+    p[0:3] = 1000 * T[0:3, 3] - FK_OFFSET_MM
     p[3:6] = Rot2eul(T[0:3, 0:3], seq='XYZ', degree=True)
     return p
 
@@ -173,6 +177,10 @@ print(f"  Diff (pin-real): dx={pin_pos[0]-p_real[0]:.1f}, dy={pin_pos[1]-p_real[
 print(f"  Pinocchio  eul: rx={pin_eul[0]:.1f}, ry={pin_eul[1]:.1f}, rz={pin_eul[2]:.1f} deg")
 print(f"  Real robot eul: rx={p_real[3]:.1f}, ry={p_real[4]:.1f}, rz={p_real[5]:.1f} deg")
 print(f"  Total pos err: {np.linalg.norm(pin_pos - np.array(p_real[:3])):.1f} mm")
+
+# FK 오프셋 보정값 저장 (SE3_to_p6에서 사용)
+FK_OFFSET_MM = pin_pos - np.array(p_real[:3])
+print(f"  >> FK_OFFSET_MM = [{FK_OFFSET_MM[0]:.1f}, {FK_OFFSET_MM[1]:.1f}, {FK_OFFSET_MM[2]:.1f}] mm (자동 보정 적용)")
 
 # %% Step 7: 데모 선택 + 라운드 수
 DEMO_TYPE = 'maze'   # 'minigolf', 'billiards', 또는 'maze' (3-cushion)
