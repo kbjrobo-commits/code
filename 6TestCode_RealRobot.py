@@ -84,38 +84,45 @@ def verify_movel_reached(p_target, tolerance_mm=5.0):
 FK_OFFSET_MM = np.zeros(3)
 
 def SE3_to_p6(T):
-    """SE3(4x4) -> [x_mm, y_mm, z_mm, rx, ry, rz] (Euler XYZ deg)
-    FK_OFFSET_MM 보정 적용: Pinocchio 좌표 -> 실제 로봇 좌표"""
+    """SE3(4x4) -> [x_mm, y_mm, z_mm, rx, ry, rz] (Euler extrinsic xyz deg)
+    FK_OFFSET_MM 보정 적용: Pinocchio 좌표 -> 실제 로봇 좌표
+    Indy7 movel은 extrinsic xyz (fixed-frame RPY) 사용"""
     p = np.zeros(6)
     p[0:3] = 1000 * T[0:3, 3] - FK_OFFSET_MM
-    p[3:6] = Rot2eul(T[0:3, 0:3], seq='XYZ', degree=True)
+    p[3:6] = Rot2eul(T[0:3, 0:3], seq='xyz', degree=True)
     return p
 
 
-def replay_trajectory_on_real(q_traj_deg, q_strike_wps, q_lift_deg, phases, label="", strike_speed=1.0):
-    """관절 각도 궤적을 실제 로봇에서 재생 -- 전구간 MoveJ
+def replay_trajectory_on_real(traj_SE3, phases=None, label="", strike_speed=1.0):
+    """SE3 궤적을 실제 로봇에서 재생 -- 전구간 MoveL
 
-    Phase 1 (Approach):  waypoint별 MoveJ로 안전 접근 (vel=20%)
-    Phase 1.5 (Align):   Ready 위치에서 정지 -> 정밀 정렬
-    Phase 2 (Strike):    Strike waypoint별 MoveJ (vel=100%)
-    Phase 3 (Retract):   수직 상승 + Home movej
+    Phase 1 (Approach):  waypoint별 MoveL로 안전 접근 (vel=20%)
+    Phase 1.5 (Align):   Ready 위치에서 정지 -> 정밀 정렬 movel
+    Phase 2 (Strike):    단일 MoveL 풀스윙 (vel=strike_speed%)
+    Phase 3 (Retract):   수직 상승 movel -> Home movej
     """
+    if phases is None:
+        phases = {'approach': (0, len(traj_SE3)),
+                  'strike': (len(traj_SE3), len(traj_SE3)),
+                  'follow': (len(traj_SE3), len(traj_SE3))}
+
     approach_start = phases['approach'][0]
     approach_end = phases['approach'][1]
+    follow_end = phases['follow'][1] if phases['follow'][1] > 0 else len(traj_SE3)
 
-    # ======== Phase 1: Approach (MoveJ waypoints) ========
-    APPROACH_STEP = 100  # 100 waypoints마다 1개
+    # ======== Phase 1: Approach (MoveL waypoints) ========
+    APPROACH_MOVEL_STEP = 100
     APPROACH_VEL = 20
     APPROACH_ACC = 50
 
-    waypoint_indices = list(range(approach_start, approach_end, APPROACH_STEP))
+    waypoint_indices = list(range(approach_start, approach_end, APPROACH_MOVEL_STEP))
     if waypoint_indices[-1] != approach_end - 1:
         waypoint_indices.append(approach_end - 1)
 
-    print(f"  [{label}] Phase 1: MoveJ Approach ({len(waypoint_indices)} waypoints)...")
+    print(f"  [{label}] Phase 1: MoveL Approach ({len(waypoint_indices)} waypoints)...")
     for wi, idx in enumerate(waypoint_indices):
-        q_deg = q_traj_deg[idx]
-        indy.movej(list(q_deg), vel_ratio=APPROACH_VEL, acc_ratio=APPROACH_ACC)
+        p_des = SE3_to_p6(traj_SE3[idx])
+        indy.movel(list(p_des), vel_ratio=APPROACH_VEL, acc_ratio=APPROACH_ACC)
         wait_indy()
         if wi % 5 == 0:
             print(f"    waypoint {wi+1}/{len(waypoint_indices)}")
@@ -123,40 +130,58 @@ def replay_trajectory_on_real(q_traj_deg, q_strike_wps, q_lift_deg, phases, labe
     print(f"  [{label}] Approach 완료")
 
     # ======== Phase 1.5: Align (정지 + 정밀 정렬) ========
-    q_ready = q_traj_deg[approach_end - 1]
+    T_ready = traj_SE3[approach_end - 1]
+    p_ready = SE3_to_p6(T_ready)
     print(f"  [{label}] Phase 1.5: Align -- 정지 후 정밀 정렬")
     time.sleep(1.0)
-    indy.movej(list(q_ready), vel_ratio=10, acc_ratio=30)
+    indy.movel(list(p_ready), vel_ratio=10, acc_ratio=30)
     wait_indy()
+    verify_movel_reached(p_ready, tolerance_mm=2.0)
     time.sleep(0.5)
     print(f"  [{label}] Ready 위치 정렬 완료")
 
+    # ======== Phase 2: Strike (단일 MoveL 풀스윙) ========
+    T_follow_end = traj_SE3[min(follow_end - 1, len(traj_SE3) - 1)]
+    p_target = SE3_to_p6(T_follow_end)
+
     # --- 진단 출력 ---
     p_now = indy.get_control_data()['p']
-    q_now = indy.get_control_data()['q']
-    q_err = np.linalg.norm(np.array(q_now) - np.array(q_ready))
+    strike_vec = np.array(p_target[:3]) - np.array(p_now[:3])
+    strike_dist = np.linalg.norm(strike_vec)
+    strike_dir_actual = strike_vec / strike_dist if strike_dist > 1e-3 else strike_vec
     print(f"  [{label}] === STRIKE DIAG ===")
-    print(f"    Ready q_err: {q_err:.3f} deg")
-    print(f"    Ready ACT pos: [{p_now[0]:.1f}, {p_now[1]:.1f}, {p_now[2]:.1f}] mm")
-    print(f"    Ready ACT eul: [{p_now[3]:.1f}, {p_now[4]:.1f}, {p_now[5]:.1f}] deg")
-    print(f"    Strike waypoints: {len(q_strike_wps)}개")
+    print(f"    Ready  CMD : [{p_ready[0]:.1f}, {p_ready[1]:.1f}, {p_ready[2]:.1f}] mm")
+    print(f"    Ready  ACT : [{p_now[0]:.1f}, {p_now[1]:.1f}, {p_now[2]:.1f}] mm")
+    print(f"    Target CMD : [{p_target[0]:.1f}, {p_target[1]:.1f}, {p_target[2]:.1f}] mm")
+    print(f"    Strike dir : [{strike_dir_actual[0]:.3f}, {strike_dir_actual[1]:.3f}, {strike_dir_actual[2]:.3f}]")
+    print(f"    Strike dist: {strike_dist:.1f} mm")
+    print(f"    Ready  eul : [{p_ready[3]:.1f}, {p_ready[4]:.1f}, {p_ready[5]:.1f}] deg (extrinsic xyz)")
+    print(f"    Target eul : [{p_target[3]:.1f}, {p_target[4]:.1f}, {p_target[5]:.1f}] deg")
+    print(f"    Actual eul : [{p_now[3]:.1f}, {p_now[4]:.1f}, {p_now[5]:.1f}] deg")
     print(f"  ==================")
 
-    # ======== Phase 2: Strike (waypoint별 MoveJ) ========
-    print(f"  [{label}] Phase 2: MoveJ Strike ({len(q_strike_wps)} waypoints)! vel=100%")
-    for si, q_sw in enumerate(q_strike_wps[1:], 1):  # 첫번째는 q_ready와 동일, skip
-        indy.movej(list(q_sw), vel_ratio=100, acc_ratio=300)
+    dist_mm = strike_dist
+    if dist_mm < MOVEL_MIN_DIST_MM:
+        print(f"  [{label}] movel 거리 {dist_mm:.1f}mm < {MOVEL_MIN_DIST_MM}mm -- 건너뜀")
+    else:
+        vel_pct = np.clip(strike_speed / MAX_TOOL_SPEED * 100, 10, 100)
+        print(f"  [{label}] Phase 2: MoveL Strike! vel={vel_pct:.0f}%, dist={dist_mm:.0f}mm")
+        indy.movel(list(p_target), vel_ratio=vel_pct, acc_ratio=100)
         wait_indy()
-    p_after = indy.get_control_data()['p']
-    print(f"    After strike: [{p_after[0]:.1f}, {p_after[1]:.1f}, {p_after[2]:.1f}] mm")
-    print(f"  [{label}] Strike 완료!")
+        p_after = indy.get_control_data()['p']
+        print(f"    After strike: [{p_after[0]:.1f}, {p_after[1]:.1f}, {p_after[2]:.1f}] mm")
+        verify_movel_reached(p_target)
+        print(f"  [{label}] Strike 완료!")
 
     # ======== Phase 3: Retract (수직 상승 + Home) ========
-    print(f"  [{label}] Phase 3: Lift + Home")
-    indy.movej(list(q_lift_deg), vel_ratio=30, acc_ratio=100)
+    T_lift = T_follow_end.copy()
+    T_lift[2, 3] += RETRACT_HEIGHT
+    p_lift = SE3_to_p6(T_lift)
+
+    print(f"  [{label}] Phase 3: Vertical lift + Home")
+    indy.movel(list(p_lift), vel_ratio=30, acc_ratio=100)
     wait_indy()
-    indy.movej(HOME_Q_DEG, vel_ratio=30, acc_ratio=100)
-    wait_indy()
+    verify_movel_reached(p_lift)
     print(f"  [{label}] 전체 완료")
 
 print("헬퍼 함수 정의 완료")
@@ -168,7 +193,7 @@ q_rad = np.array(HOME_Q_DEG) * np.pi / 180
 T_pin = pb.my_robot.pinModel.FK(q_rad)
 p_real = indy.get_control_data()['p']
 pin_pos = T_pin[:3,3]*1000  # mm
-pin_eul = Rot2eul(T_pin[:3,:3], seq='XYZ', degree=True)
+pin_eul = Rot2eul(T_pin[:3,:3], seq='xyz', degree=True)
 print(f"=== FK vs Real Robot (HOME) ===")
 print(f"  Pinocchio  pos: x={pin_pos[0]:.1f}, y={pin_pos[1]:.1f}, z={pin_pos[2]:.1f} mm")
 print(f"  Real robot pos: x={p_real[0]:.1f}, y={p_real[1]:.1f}, z={p_real[2]:.1f} mm")
@@ -356,21 +381,7 @@ for rnd in range(1, NUM_ROUNDS + 1):
     if hasattr(pb.my_robot, '_qdot_des'):
         pb.my_robot._qdot_des = np.zeros([6, 1])
 
-    # Strike 구간 IK waypoints 생성 (직선 경로 보장)
-    strike_start_idx = phases['approach'][1] - 1
-    strike_end_idx = min(phases['follow'][1] - 1, len(trajectory) - 1)
-    N_STRIKE_WP = 10  # strike 구간을 10개 waypoint로 분할
-    strike_indices = np.linspace(strike_start_idx, strike_end_idx, N_STRIKE_WP + 1, dtype=int)
-    q_strike_chain = [q_ready.copy()]
-    for si in strike_indices[1:]:
-        q_step = ik.solve_step(q_strike_chain[-1], trajectory[si])
-        q_strike_chain.append(q_step)
-    q_strike_chain_deg = [np.degrees(q) for q in q_strike_chain]
-    print(f"  Strike waypoints: {len(q_strike_chain_deg)}개 생성")
-
     # * 임팩트 후 도구-큐볼 충돌 즉시 비활성화 *
-    # Headless planner는 충돌 후 도구를 제거하므로, GUI에서도 동일하게
-    # 도구가 공 궤적에 간섭하지 않도록 비활성화
     if hasattr(env, 'tool_id') and hasattr(env, 'cue_ball_id'):
         p.setCollisionFilterPair(env.tool_id, env.cue_ball_id, -1, -1,
                                  enableCollision=0, physicsClientId=pb.ClientId)
@@ -379,7 +390,6 @@ for rnd in range(1, NUM_ROUNDS + 1):
     T_lift = trajectory[-1].copy()
     T_lift[2, 3] += RETRACT_HEIGHT
     q_lift = ik.solve_step(q_follow, T_lift)
-    q_lift_deg = np.degrees(q_lift)
     pb.MoveRobot(q_lift, degree=False)
     time.sleep(0.3)
 
@@ -405,9 +415,8 @@ for rnd in range(1, NUM_ROUNDS + 1):
         success = env.is_pocketed()
         print(f"  결과: {'POCKETED!' if success else 'miss'}")
 
-    # 궤적 저장: approach q_traj + strike waypoints + lift + phases
-    q_traj_deg = np.degrees(q_traj)  # approach 구간 rad -> deg
-    saved_trajectories.append((q_traj_deg, q_strike_chain_deg, q_lift_deg, phases))
+    # 궤적 + phases 저장, 홈 복귀
+    saved_trajectories.append((trajectory, phases))
     pb.MoveRobot(HOME_Q_DEG, degree=True)
     time.sleep(1)
 
@@ -418,7 +427,7 @@ print(f"{'='*50}")
 
 # %% Step 10: *** 실제 로봇 -- 라운드 재생 (루프) ***
 # [!] E-Stop 버튼에 손 올리고 실행!
-for rnd_idx, (q_traj_d, q_strike_wps, q_lift_d, phs) in enumerate(saved_trajectories):
+for rnd_idx, (traj, phs) in enumerate(saved_trajectories):
     rnd_num = rnd_idx + 1
     print("=" * 50)
     print(f"  REAL Round {rnd_num}/{len(saved_trajectories)} 재생")
@@ -426,7 +435,7 @@ for rnd_idx, (q_traj_d, q_strike_wps, q_lift_d, phs) in enumerate(saved_trajecto
     movej_both(HOME_Q_DEG, wait=True)
     time.sleep(1)
     try:
-        replay_trajectory_on_real(q_traj_d, q_strike_wps, q_lift_d, phs, label=f"Round {rnd_num}")
+        replay_trajectory_on_real(traj, phases=phs, label=f"Round {rnd_num}")
     except Exception as e:
         print(f"  [!] Round {rnd_num} 오류: {e}")
         try:
