@@ -61,10 +61,15 @@ def movej_both(q_deg, wait=True):
         wait_indy()
 
 
-def verify_movel_reached(p_target, tolerance_mm=5.0):
-    """movel 목표 도달 여부 검증 -- 안 됐으면 재시도"""
+def verify_movel_reached(p_target, tolerance_mm=5.0, abort_mm=100.0):
+    """movel 목표 도달 여부 검증 -- 큰 오차시 중단, 작은 오차시 재시도"""
     p_now = indy.get_control_data()['p']
     err_mm = np.linalg.norm(np.array(p_now[:3]) - np.array(p_target[:3]))
+    if err_mm > abort_mm:
+        msg = (f"[ABORT] 위치 오차 {err_mm:.0f}mm >> {abort_mm:.0f}mm "
+               f"-- 좌표계 불일치 의심. 중단합니다.")
+        print(f"  {msg}")
+        raise RuntimeError(msg)
     if err_mm > tolerance_mm:
         print(f"  [WARNING] movel 미도달: err={err_mm:.1f}mm > {tolerance_mm}mm, 재시도...")
         indy.movel(list(p_target), vel_ratio=50, acc_ratio=100)
@@ -396,11 +401,18 @@ print(f"{'='*50}")
 for rnd_idx, (traj, phs) in enumerate(saved_trajectories):
     rnd_num = rnd_idx + 1
     print("=" * 50)
-    print(f"  REAL Round {rnd_num} 재생")
+    print(f"  REAL Round {rnd_num}/{len(saved_trajectories)} 대기")
     print("=" * 50)
+    input(f"  [Enter] 를 누르면 Round {rnd_num} 시작 (E-Stop 준비!) >>> ")
     movej_both(HOME_Q_DEG, wait=True)
     time.sleep(1)
-    replay_trajectory_on_real(traj, phases=phs, label=f"Round {rnd_num}")
+    try:
+        replay_trajectory_on_real(traj, phases=phs, label=f"Round {rnd_num}")
+    except RuntimeError as e:
+        print(f"  [!] Round {rnd_num} 중단: {e}")
+        print(f"  로봇 상태 확인 후 다음 라운드 진행 가능")
+        indy.recover()
+        time.sleep(1)
     movej_both(HOME_Q_DEG, wait=True)
     print(f"Round {rnd_num} 완료!")
 
