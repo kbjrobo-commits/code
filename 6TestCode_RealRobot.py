@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # %% [markdown]
 # # 6. Real Robot Test — 시뮬 궤적을 실제 로봇이 따라하는지 확인
 #
@@ -73,7 +74,7 @@ def verify_movel_reached(p_target, tolerance_mm=5.0):
 
 
 def SE3_to_p6(T):
-    """SE3(4x4) → [x_mm, y_mm, z_mm, rx, ry, rz] (Euler XYZ deg)"""
+    """SE3(4x4) -> [x_mm, y_mm, z_mm, rx, ry, rz] (Euler XYZ deg)"""
     p = np.zeros(6)
     p[0:3] = 1000 * T[0:3, 3]
     p[3:6] = Rot2eul(T[0:3, 0:3], seq='XYZ', degree=True)
