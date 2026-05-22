@@ -4,14 +4,14 @@ import pybullet as p
 import pybullet_data
 import time
 import pyrealsense2 as rs
-from project.config import *
-from project.environment.maze_env import MazeEnvironment
+from config import *
+from environment.maze_env import MazeEnvironment
 
-TABLE_WIDTH_MM = int(MAZE_TABLE_LENGTH * 1000)
-TABLE_HEIGHT_MM = int(MAZE_TABLE_WIDTH * 1000)
+TABLE_WIDTH_MM = int((MAZE_TABLE_LENGTH + 0.06) * 1000)
+TABLE_HEIGHT_MM = int((MAZE_TABLE_WIDTH + 0.06) * 1000)
 
-DISPLAY_WIDTH = int(MAZE_TABLE_LENGTH * 1000)
-DISPLAY_HEIGHT = int(MAZE_TABLE_WIDTH * 1000)
+DISPLAY_WIDTH = int((MAZE_TABLE_LENGTH + 0.06) * 1000)
+DISPLAY_HEIGHT = int((MAZE_TABLE_WIDTH + 0.06) * 1000)
 
 aruco_size = 30
 
@@ -40,6 +40,20 @@ RED_UPPER2 = np.array([180, 255, 255])
 YELLOW_LOWER = np.array([20, 100, 100])
 YELLOW_UPPER = np.array([35, 255, 255])
 
+BLUE_LOWER = np.array([100, 100, 50])
+BLUE_UPPER = np.array([130, 255, 255])
+
+BLACK_LOWER = np.array([35, 80, 50])
+BLACK_UPPER = np.array([85, 255, 255])
+
+# Calibration Load
+calib = np.load("calibration_result.npz")
+
+K = calib["K"]
+dist = calib["dist"]
+
+# 추가한 부분 1
+
 # Realsense 초기화
 pipeline = rs.pipeline()
 config = rs.config()
@@ -61,6 +75,26 @@ config.enable_stream(
 )
 
 profile = pipeline.start(config)
+
+# calibration 적용
+newK, roi = cv2.getOptimalNewCameraMatrix(
+    K,
+    dist,
+    (1280, 720),
+    1,
+    (1280, 720)
+)
+
+mapx, mapy = cv2.initUndistortRectifyMap(
+    K,
+    dist,
+    None,
+    newK,
+    (1280, 720),
+    cv2.CV_32FC1
+)
+# 추가한 부분 2
+
 align = rs.align(rs.stream.color)
 depth_sensor = profile.get_device().first_depth_sensor()
 depth_scale = depth_sensor.get_depth_scale()
@@ -109,6 +143,27 @@ def get_homography_from_aruco(frame):
     )
 
     return H
+
+def remove_corner_regions(mask):
+    cleaned = mask.copy()
+
+    pad = 60
+
+    h, w = cleaned.shape
+
+    # TL
+    cleaned[0:pad, 0:pad] = 0
+
+    # TR
+    cleaned[0:pad, w-pad:w] = 0
+
+    # BR
+    cleaned[h-pad:h, w-pad:w] = 0
+
+    # BL
+    cleaned[h-pad:h, 0:pad] = 0
+
+    return cleaned
 
 def pixel_to_table(cx, cy):
     table_x = (
@@ -163,8 +218,8 @@ def detect_ball(mask, frame, color):
 
             (cx, cy), radius = cv2.minEnclosingCircle(cnt)
 
-            cx = int(cx)
-            cy = int(cy)
+            # cx = int(cx)
+            # cy = int(cy)
 
             table_x, table_y = pixel_to_table(cx, cy)
 
@@ -181,9 +236,12 @@ def detect_ball(mask, frame, color):
         cx, cy = best_ball["center"]
         radius = best_ball["radius"]
 
+        draw_cx = int(cx)
+        draw_cy = int(cy)   
+
         cv2.circle(
             frame,
-            (cx, cy),
+            (draw_cx, draw_cy),
             int(radius),
             color,
             3
@@ -210,6 +268,20 @@ while True:
         color_frame.get_data()
     )
 
+    # calibration 적용
+    undistorted = cv2.remap(
+        color_image,
+        mapx,
+        mapy,
+        cv2.INTER_LINEAR
+    )
+    # 추가한 부분 3
+
+    # cv2.imshow("raw", color_image)
+    # cv2.imshow("undistorted", undistorted)
+    # cv2.waitKey(0)
+    # cv2.destroyAllWindows()
+
     depth_image = np.asanyarray(
         depth_frame.get_data()
     )
@@ -219,14 +291,18 @@ while True:
         depth_scale *
         1000
     )
-    H = get_homography_from_aruco(color_image)
+    H = get_homography_from_aruco(
+        # color_image
+        undistorted
+    )
 
     if H is None:
         print("Need ArUco markers 0,1,2,3")
         continue
 
     warped_color = cv2.warpPerspective(
-        color_image,
+        # color_image,
+        undistorted,
         H,
         (DISPLAY_WIDTH, DISPLAY_HEIGHT)
     )
@@ -271,6 +347,38 @@ while True:
         YELLOW_UPPER
     )
 
+    blue_mask = cv2.inRange(
+        hsv,
+        BLUE_LOWER,
+        BLUE_UPPER
+    )
+
+    black_mask = cv2.inRange(
+        hsv,
+        BLACK_LOWER,
+        BLACK_UPPER
+    )
+
+    white_mask = remove_corner_regions(
+        white_mask
+    )
+
+    red_mask = remove_corner_regions(
+        red_mask
+    )
+
+    yellow_mask = remove_corner_regions(
+        yellow_mask
+    )
+
+    # blue_mask = remove_corner_regions(
+    #     blue_mask
+    # )
+    
+    # black_mask = remove_corner_regions(
+    #     black_mask
+    # )
+
     white_ball = detect_ball(
         white_mask,
         warped_color,
@@ -289,6 +397,9 @@ while True:
         (0, 255, 255)
     )
     cv2.imshow("Warped Result", warped_color)
+    cv2.imshow("red", red_mask)
+    cv2.imshow("yellow", yellow_mask)
+    cv2.imshow("white", white_mask)
 
     # 세 공 모두 검출 성공
     if (
@@ -298,7 +409,6 @@ while True:
     ):
         print("All balls detected")
         cv2.waitKey(0)
-
         cv2.destroyAllWindows()
         break
 
@@ -329,15 +439,15 @@ result = {
 print("\n===== DETECTION RESULT =====")
 print(result)
 
-cv2.imshow(
-    "Warped Result",
-    warped_color
-)
+# cv2.imshow(
+#     "Warped Result",
+#     warped_color
+# )
 
-cv2.waitKey(0)
+# cv2.waitKey(0)
 
-pipeline.stop()
-cv2.destroyAllWindows()
+# pipeline.stop()
+# cv2.destroyAllWindows()
 
 
 """
@@ -471,8 +581,8 @@ W = MAZE_TABLE_WIDTH
 CX = MAZE_TABLE_CENTER_X
 CY = MAZE_TABLE_CENTER_Y
 
-x_offset = CX - L / 2
-y_offset = CY - W / 2
+x_offset = CX - L / 2 - 0.03
+y_offset = CY - W / 2 - 0.03
 
 cue_pos = [
     white_ball[0] + x_offset,
