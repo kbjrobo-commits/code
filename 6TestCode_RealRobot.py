@@ -44,14 +44,21 @@ def sync_indy():
     q = indy.get_control_data()['q']
     pb.MoveRobot(q, degree=True)
 
-def wait_indy(timeout=30):
-    """실제 로봇 동작 완료 대기 (timeout 포함)"""
+def wait_indy(timeout=60):
+    """실제 로봇 동작 완료 대기 -- 모션 시작 대기 포함"""
+    # 1) 모션이 시작될 때까지 대기 (movel 명령 후 약간의 지연)
+    time.sleep(0.2)  # 명령 처리 대기
     t0 = time.time()
+    while time.time() - t0 < 3.0:  # 최대 3초간 모션 시작 대기
+        if indy.get_motion_data()["is_in_motion"]:
+            break
+        time.sleep(0.05)
+    # 2) 모션 완료 대기
     while time.time() - t0 < timeout:
         sync_indy()
         if not indy.get_motion_data()["is_in_motion"]:
             break
-        time.sleep(0.01)
+        time.sleep(0.05)
     print("  모션 완료")
 
 def movej_both(q_deg, wait=True):
