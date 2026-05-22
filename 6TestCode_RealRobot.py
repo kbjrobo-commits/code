@@ -80,23 +80,15 @@ def verify_movel_reached(p_target, tolerance_mm=5.0):
     return True
 
 
-# TCP 오프셋: URDF tcp joint은 link6에서 [0,0,0.06]m
-# Pinocchio FK는 TCP 위치를 반환하지만, 실제 로봇 movel은 link6(플랜지) 기준
-TCP_OFFSET_LOCAL = np.array([0.0, 0.0, 0.06])  # tcp joint xyz in URDF
-
-# FK 잔여 오프셋 (TCP 보정 후에도 남는 차이, Step 6에서 계산)
-FK_RESIDUAL_MM = np.zeros(3)
+# FK 보정 오프셋 (Step 6에서 계산됨)
+FK_OFFSET_MM = np.zeros(3)
 
 def SE3_to_p6(T):
     """SE3(4x4) -> [x_mm, y_mm, z_mm, rx, ry, rz] (Euler XYZ deg)
-    TCP -> link6 변환 적용: Pinocchio TCP 좌표 -> 실제 로봇 link6 좌표"""
-    R = T[0:3, 0:3]
-    tcp_pos = T[0:3, 3]  # TCP 위치 (m)
-    # link6 위치 = TCP - R * tcp_offset (TCP에서 도구 길이만큼 뒤로)
-    link6_pos = tcp_pos - R @ TCP_OFFSET_LOCAL
+    FK_OFFSET_MM 보정 적용: Pinocchio 좌표 -> 실제 로봇 좌표"""
     p = np.zeros(6)
-    p[0:3] = 1000 * link6_pos - FK_RESIDUAL_MM
-    p[3:6] = Rot2eul(R, seq='XYZ', degree=True)
+    p[0:3] = 1000 * T[0:3, 3] - FK_OFFSET_MM
+    p[3:6] = Rot2eul(T[0:3, 0:3], seq='XYZ', degree=True)
     return p
 
 
@@ -200,25 +192,17 @@ movej_both(HOME_Q_DEG, wait=True)
 q_rad = np.array(HOME_Q_DEG) * np.pi / 180
 T_pin = pb.my_robot.pinModel.FK(q_rad)
 p_real = indy.get_control_data()['p']
-
-# Pinocchio TCP -> link6 변환
-R_home = T_pin[:3,:3]
-pin_tcp_pos = T_pin[:3,3]*1000  # mm
-pin_link6_pos = pin_tcp_pos - R_home @ (TCP_OFFSET_LOCAL * 1000)  # mm
-
-pin_eul = Rot2eul(R_home, seq='XYZ', degree=True)
+pin_pos = T_pin[:3,3]*1000  # mm
+pin_eul = Rot2eul(T_pin[:3,:3], seq='XYZ', degree=True)
 print(f"=== FK vs Real Robot (HOME) ===")
-print(f"  Pinocchio TCP  : x={pin_tcp_pos[0]:.1f}, y={pin_tcp_pos[1]:.1f}, z={pin_tcp_pos[2]:.1f} mm")
-print(f"  Pinocchio link6: x={pin_link6_pos[0]:.1f}, y={pin_link6_pos[1]:.1f}, z={pin_link6_pos[2]:.1f} mm")
-print(f"  Real robot pos : x={p_real[0]:.1f}, y={p_real[1]:.1f}, z={p_real[2]:.1f} mm")
-residual = pin_link6_pos - np.array(p_real[:3])
-print(f"  Residual (after TCP fix): dx={residual[0]:.1f}, dy={residual[1]:.1f}, dz={residual[2]:.1f} mm")
+print(f"  Pinocchio  pos: x={pin_pos[0]:.1f}, y={pin_pos[1]:.1f}, z={pin_pos[2]:.1f} mm")
+print(f"  Real robot pos: x={p_real[0]:.1f}, y={p_real[1]:.1f}, z={p_real[2]:.1f} mm")
+print(f"  Diff (pin-real): dx={pin_pos[0]-p_real[0]:.1f}, dy={pin_pos[1]-p_real[1]:.1f}, dz={pin_pos[2]-p_real[2]:.1f} mm")
 print(f"  Pinocchio  eul: rx={pin_eul[0]:.1f}, ry={pin_eul[1]:.1f}, rz={pin_eul[2]:.1f} deg")
 print(f"  Real robot eul: rx={p_real[3]:.1f}, ry={p_real[4]:.1f}, rz={p_real[5]:.1f} deg")
 
-# 잔여 오프셋 저장
-FK_RESIDUAL_MM = residual.copy()
-print(f"  >> FK_RESIDUAL_MM = [{FK_RESIDUAL_MM[0]:.1f}, {FK_RESIDUAL_MM[1]:.1f}, {FK_RESIDUAL_MM[2]:.1f}] mm")
+FK_OFFSET_MM = pin_pos - np.array(p_real[:3])
+print(f"  >> FK_OFFSET_MM = [{FK_OFFSET_MM[0]:.1f}, {FK_OFFSET_MM[1]:.1f}, {FK_OFFSET_MM[2]:.1f}] mm")
 
 # %% Step 7: 데모 선택 + 라운드 수
 DEMO_TYPE = 'maze'   # 'minigolf', 'billiards', 또는 'maze' (3-cushion)
