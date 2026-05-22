@@ -4,8 +4,8 @@ import pybullet as p
 import pybullet_data
 import time
 import pyrealsense2 as rs
-from config import *
-from environment.maze_env import MazeEnvironment
+from project.config import *
+from preject.environment.maze_env import MazeEnvironment
 
 TABLE_WIDTH_MM = int((MAZE_TABLE_LENGTH + 0.06) * 1000)
 TABLE_HEIGHT_MM = int((MAZE_TABLE_WIDTH + 0.06) * 1000)
@@ -355,11 +355,11 @@ def detect_balls() :
             BLUE_UPPER
         )
 
-        black_mask = cv2.inRange(
-            hsv,
-            BLACK_LOWER,
-            BLACK_UPPER
-        )
+        # black_mask = cv2.inRange(
+        #     hsv,
+        #     BLACK_LOWER,
+        #     BLACK_UPPER
+        # )
 
         white_mask = remove_corner_regions(
             white_mask
@@ -449,25 +449,26 @@ def detect_balls() :
 
     center = np.array([CX, CY, H])
 
-    x_offset = center[0] - L/2
-    y_offset = center[1] - W/2
+    # x_offset = center[0] - L/2
+    y_offset = - center[1]
+    z_offset = MAZE_BALL_RADIUS + H
 
     cue_pos = [
-        white_ball[0] + x_offset,
-        white_ball[1] + y_offset,
-        ball_h
+        white_ball[0],
+        - (white_ball[1] + y_offset),
+        z_offset
     ]
 
     target_pos = [
-        yellow_ball[0] + x_offset,
-        yellow_ball[1] + y_offset,
-        ball_h
+        yellow_ball[0],
+        - (yellow_ball[1] + y_offset),
+        z_offset
     ]
 
     ball2_pos = [
-        red_ball[0] + x_offset,
-        red_ball[1] + y_offset,
-        ball_h
+        red_ball[0],
+        - (red_ball[1] + y_offset),
+        z_offset
     ]
     return cue_pos, target_pos, ball2_pos
 
