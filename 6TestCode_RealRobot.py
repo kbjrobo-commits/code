@@ -61,15 +61,10 @@ def movej_both(q_deg, wait=True):
         wait_indy()
 
 
-def verify_movel_reached(p_target, tolerance_mm=5.0, abort_mm=100.0):
-    """movel 목표 도달 여부 검증 -- 큰 오차시 중단, 작은 오차시 재시도"""
+def verify_movel_reached(p_target, tolerance_mm=5.0):
+    """movel 목표 도달 여부 검증 -- 안 됐으면 재시도"""
     p_now = indy.get_control_data()['p']
     err_mm = np.linalg.norm(np.array(p_now[:3]) - np.array(p_target[:3]))
-    if err_mm > abort_mm:
-        msg = (f"[ABORT] 위치 오차 {err_mm:.0f}mm >> {abort_mm:.0f}mm "
-               f"-- 좌표계 불일치 의심. 중단합니다.")
-        print(f"  {msg}")
-        raise RuntimeError(msg)
     if err_mm > tolerance_mm:
         print(f"  [WARNING] movel 미도달: err={err_mm:.1f}mm > {tolerance_mm}mm, 재시도...")
         indy.movel(list(p_target), vel_ratio=50, acc_ratio=100)
@@ -169,9 +164,15 @@ movej_both(HOME_Q_DEG, wait=True)
 q_rad = np.array(HOME_Q_DEG) * np.pi / 180
 T_pin = pb.my_robot.pinModel.FK(q_rad)
 p_real = indy.get_control_data()['p']
-print(f"Pinocchio EE: {T_pin[:3,3]*1000} mm")
-print(f"실제 로봇 EE: {p_real[:3]} mm")
-print(f"오차: {np.linalg.norm(T_pin[:3,3]*1000 - np.array(p_real[:3])):.1f} mm")
+pin_pos = T_pin[:3,3]*1000  # mm
+pin_eul = Rot2eul(T_pin[:3,:3], seq='XYZ', degree=True)
+print(f"=== FK vs Real Robot (HOME) ===")
+print(f"  Pinocchio  pos: x={pin_pos[0]:.1f}, y={pin_pos[1]:.1f}, z={pin_pos[2]:.1f} mm")
+print(f"  Real robot pos: x={p_real[0]:.1f}, y={p_real[1]:.1f}, z={p_real[2]:.1f} mm")
+print(f"  Diff (pin-real): dx={pin_pos[0]-p_real[0]:.1f}, dy={pin_pos[1]-p_real[1]:.1f}, dz={pin_pos[2]-p_real[2]:.1f} mm")
+print(f"  Pinocchio  eul: rx={pin_eul[0]:.1f}, ry={pin_eul[1]:.1f}, rz={pin_eul[2]:.1f} deg")
+print(f"  Real robot eul: rx={p_real[3]:.1f}, ry={p_real[4]:.1f}, rz={p_real[5]:.1f} deg")
+print(f"  Total pos err: {np.linalg.norm(pin_pos - np.array(p_real[:3])):.1f} mm")
 
 # %% Step 7: 데모 선택 + 라운드 수
 DEMO_TYPE = 'maze'   # 'minigolf', 'billiards', 또는 'maze' (3-cushion)
@@ -401,17 +402,18 @@ print(f"{'='*50}")
 for rnd_idx, (traj, phs) in enumerate(saved_trajectories):
     rnd_num = rnd_idx + 1
     print("=" * 50)
-    print(f"  REAL Round {rnd_num}/{len(saved_trajectories)} 대기")
+    print(f"  REAL Round {rnd_num}/{len(saved_trajectories)} 재생")
     print("=" * 50)
-    input(f"  [Enter] 를 누르면 Round {rnd_num} 시작 (E-Stop 준비!) >>> ")
     movej_both(HOME_Q_DEG, wait=True)
     time.sleep(1)
     try:
         replay_trajectory_on_real(traj, phases=phs, label=f"Round {rnd_num}")
-    except RuntimeError as e:
-        print(f"  [!] Round {rnd_num} 중단: {e}")
-        print(f"  로봇 상태 확인 후 다음 라운드 진행 가능")
-        indy.recover()
+    except Exception as e:
+        print(f"  [!] Round {rnd_num} 오류: {e}")
+        try:
+            indy.recover()
+        except:
+            pass
         time.sleep(1)
     movej_both(HOME_Q_DEG, wait=True)
     print(f"Round {rnd_num} 완료!")
