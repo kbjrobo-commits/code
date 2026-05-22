@@ -43,8 +43,8 @@ YELLOW_UPPER = np.array([35, 255, 255])
 BLUE_LOWER = np.array([100, 100, 50])
 BLUE_UPPER = np.array([130, 255, 255])
 
-BLACK_LOWER = np.array([35, 80, 50])
-BLACK_UPPER = np.array([85, 255, 255])
+# BLACK_LOWER = np.array([35, 80, 50])
+# BLACK_UPPER = np.array([85, 255, 255])
 
 # Calibration Load
 calib = np.load("calibration_result.npz")
