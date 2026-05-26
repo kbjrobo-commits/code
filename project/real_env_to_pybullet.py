@@ -254,7 +254,6 @@ def detect_balls() :
         return None
 
     # def detect_ball(mask, frame, color):
-
     #     kernel = np.ones((7, 7), np.uint8)
 
     #     mask = cv2.morphologyEx(
@@ -273,7 +272,6 @@ def detect_balls() :
     #     max_score = 0
 
     #     for cnt in contours:
-
     #         area = cv2.contourArea(cnt)
 
     #         if area < 300:
@@ -319,7 +317,6 @@ def detect_balls() :
     #             }
 
     #     if best_ball is not None:
-
     #         cx, cy = best_ball["center"]
     #         radius = best_ball["radius"]
 
@@ -536,7 +533,7 @@ def detect_balls() :
     center = np.array([CX, CY, H])
 
     # x_offset = center[0] - L/2
-    y_offset = - center[1] - L/2 - thickness
+    y_offset = - center[1] - W/2 - thickness
     z_offset = MAZE_BALL_RADIUS + H
 
     cue_pos = [
