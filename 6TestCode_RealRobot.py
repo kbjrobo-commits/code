@@ -122,7 +122,7 @@ def replay_trajectory_on_real(q_traj_deg, traj_SE3, phases=None, label="", strik
     print(f"  [{label}] Phase 1: MoveJ Approach ({len(waypoint_indices)} waypoints)...")
     for wi, idx in enumerate(waypoint_indices):
         q_deg = q_traj_deg[idx]
-        indy.movej(list(q_deg), vel_ratio=APPROACH_VEL, acc_ratio=APPROACH_ACC)
+        indy.movej([float(x) for x in q_deg], vel_ratio=APPROACH_VEL, acc_ratio=APPROACH_ACC)
         wait_indy()
         if wi % 5 == 0:
             print(f"    waypoint {wi+1}/{len(waypoint_indices)}")
@@ -133,7 +133,7 @@ def replay_trajectory_on_real(q_traj_deg, traj_SE3, phases=None, label="", strik
     q_ready = q_traj_deg[approach_end - 1]
     print(f"  [{label}] Phase 1.5: Align -- 정지 후 정밀 정렬")
     time.sleep(1.0)
-    indy.movej(list(q_ready), vel_ratio=10, acc_ratio=30)
+    indy.movej([float(x) for x in q_ready], vel_ratio=10, acc_ratio=30)
     wait_indy()
     time.sleep(0.5)
     print(f"  [{label}] Ready 위치 정렬 완료")
@@ -407,7 +407,7 @@ for rnd in range(1, NUM_ROUNDS + 1):
         print(f"  결과: {'POCKETED!' if success else 'miss'}")
 
     # 궤적 + 관절각도 + phases 저장, 홈 복귀
-    q_traj_deg = np.degrees(q_traj)
+    q_traj_deg = np.degrees(np.array(q_traj).reshape(-1, 6))
     saved_trajectories.append((q_traj_deg, trajectory, phases))
     pb.MoveRobot(HOME_Q_DEG, degree=True)
     time.sleep(1)
