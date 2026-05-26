@@ -30,7 +30,7 @@ IK_MAX_ITER = 10              # IK 반복 횟수 per waypoint
 # 타격 파라미터 (공통)
 # ============================================================
 STRIKE_APPROACH_DIST = 0.10    # 타격 전 접근 거리 (m) — 시뮬/실제 균형 (0.08→0.10)
-STRIKE_FOLLOW_DIST = 0.10     # Follow-through 거리 (m) — 관통 후 감속
+STRIKE_FOLLOW_DIST = 0.06     # Follow-through 거리 (m) — 테이블 관통 방지용 축소
 APPROACH_DURATION = 3.0        # 접근 궤적 시간 (s)
 STRIKE_HEIGHT_OFFSET = 0.0     # 타격 높이 오프셋 (m)
 RETRACT_HEIGHT = 0.15          # 타격 후 수직 상승 높이 (m)
