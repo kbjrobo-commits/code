@@ -446,28 +446,29 @@ def detect_balls() :
     CH = MAZE_CUSHION_HEIGHT
     TH = MAZE_TABLE_HEIGHT
     ball_h = H + TH / 2 + MAZE_BALL_RADIUS + 0.001
+    thickness = 0.003
 
     center = np.array([CX, CY, H])
 
     # x_offset = center[0] - L/2
-    y_offset = - center[1]
+    y_offset = - center[1] - L/2 - thickness
     z_offset = MAZE_BALL_RADIUS + H
 
     cue_pos = [
         white_ball[0],
-        - (white_ball[1] + y_offset),
+        white_ball[1] + y_offset,
         z_offset
     ]
 
     target_pos = [
         yellow_ball[0],
-        - (yellow_ball[1] + y_offset),
+        yellow_ball[1] + y_offset,
         z_offset
     ]
 
     ball2_pos = [
         red_ball[0],
-        - (red_ball[1] + y_offset),
+        red_ball[1] + y_offset,
         z_offset
     ]
     return cue_pos, target_pos, ball2_pos
