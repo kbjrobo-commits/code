@@ -446,7 +446,7 @@ def detect_balls() :
     CH = MAZE_CUSHION_HEIGHT
     TH = MAZE_TABLE_HEIGHT
     ball_h = H + TH / 2 + MAZE_BALL_RADIUS + 0.001
-    thickness = 0.003
+    thickness = 0.03
 
     center = np.array([CX, CY, H])
 
