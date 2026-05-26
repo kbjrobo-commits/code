@@ -93,24 +93,19 @@ def SE3_to_p6(T):
     return p
 
 
-def replay_trajectory_on_real(q_traj_deg, traj_SE3, phases=None, label="", strike_speed=1.0):
-    """하이브리드 재생: Approach=MoveJ (관절한계 보장), Strike=MoveL (직선 경로)
+def replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, label="", strike_speed=1.0):
+    """전구간 MoveJ -- 시뮬 IK 관절각도를 그대로 전송
 
-    Phase 1 (Approach):  waypoint별 MoveJ로 안전 접근 (시뮬 관절각 사용)
-    Phase 1.5 (Align):   Ready 위치에서 정지 -> 정밀 정렬 movej
-    Phase 2 (Strike):    단일 MoveL 풀스윙 (직선 경로)
-    Phase 3 (Retract):   Home movej
+    Euler 변환 없음, FK 오프셋 없음, 좌표계 불일치 없음.
+    Phase 1 (Approach):  waypoint별 MoveJ
+    Phase 1.5 (Align):   Ready 위치 정밀 정렬 MoveJ
+    Phase 2 (Strike):    Follow-through MoveJ
+    Phase 3 (Retract):   Home MoveJ
     """
-    if phases is None:
-        phases = {'approach': (0, len(traj_SE3)),
-                  'strike': (len(traj_SE3), len(traj_SE3)),
-                  'follow': (len(traj_SE3), len(traj_SE3))}
-
     approach_start = phases['approach'][0]
     approach_end = phases['approach'][1]
-    follow_end = phases['follow'][1] if phases['follow'][1] > 0 else len(traj_SE3)
 
-    # ======== Phase 1: Approach (MoveJ waypoints -- 관절한계 안전) ========
+    # ======== Phase 1: Approach (MoveJ) ========
     APPROACH_STEP = 100
     APPROACH_VEL = 20
     APPROACH_ACC = 50
@@ -121,55 +116,35 @@ def replay_trajectory_on_real(q_traj_deg, traj_SE3, phases=None, label="", strik
 
     print(f"  [{label}] Phase 1: MoveJ Approach ({len(waypoint_indices)} waypoints)...")
     for wi, idx in enumerate(waypoint_indices):
-        q_deg = q_traj_deg[idx]
-        indy.movej([float(x) for x in q_deg], vel_ratio=APPROACH_VEL, acc_ratio=APPROACH_ACC)
+        indy.movej([float(x) for x in q_traj_deg[idx]], vel_ratio=APPROACH_VEL, acc_ratio=APPROACH_ACC)
         wait_indy()
         if wi % 5 == 0:
             print(f"    waypoint {wi+1}/{len(waypoint_indices)}")
-
     print(f"  [{label}] Approach 완료")
 
-    # ======== Phase 1.5: Align (정지 + 정밀 정렬 movej) ========
+    # ======== Phase 1.5: Align ========
     q_ready = q_traj_deg[approach_end - 1]
-    print(f"  [{label}] Phase 1.5: Align -- 정지 후 정밀 정렬")
-    time.sleep(1.0)
+    print(f"  [{label}] Phase 1.5: Align")
+    time.sleep(0.5)
     indy.movej([float(x) for x in q_ready], vel_ratio=10, acc_ratio=30)
     wait_indy()
     time.sleep(0.5)
-    print(f"  [{label}] Ready 위치 정렬 완료")
 
-    # ======== Phase 2: Strike (단일 MoveL 풀스윙 -- 직선 경로) ========
-    T_follow_end = traj_SE3[min(follow_end - 1, len(traj_SE3) - 1)]
-    p_target = SE3_to_p6(T_follow_end)
-
-    # --- 진단 출력 ---
+    # 진단
     p_now = indy.get_control_data()['p']
-    strike_vec = np.array(p_target[:3]) - np.array(p_now[:3])
-    strike_dist = np.linalg.norm(strike_vec)
-    strike_dir_actual = strike_vec / strike_dist if strike_dist > 1e-3 else strike_vec
-    print(f"  [{label}] === STRIKE DIAG ===")
-    print(f"    Ready  ACT : [{p_now[0]:.1f}, {p_now[1]:.1f}, {p_now[2]:.1f}] mm")
-    print(f"    Target CMD : [{p_target[0]:.1f}, {p_target[1]:.1f}, {p_target[2]:.1f}] mm")
-    print(f"    Strike dir : [{strike_dir_actual[0]:.3f}, {strike_dir_actual[1]:.3f}, {strike_dir_actual[2]:.3f}]")
-    print(f"    Strike dist: {strike_dist:.1f} mm")
-    print(f"    Ready  eul : [{p_now[3]:.1f}, {p_now[4]:.1f}, {p_now[5]:.1f}] deg")
-    print(f"    Target eul : [{p_target[3]:.1f}, {p_target[4]:.1f}, {p_target[5]:.1f}] deg (extrinsic xyz)")
-    print(f"  ==================")
+    print(f"    Ready pos: [{p_now[0]:.1f}, {p_now[1]:.1f}, {p_now[2]:.1f}] mm")
+    print(f"    Ready eul: [{p_now[3]:.1f}, {p_now[4]:.1f}, {p_now[5]:.1f}] deg")
+    print(f"  [{label}] Ready 정렬 완료")
 
-    dist_mm = strike_dist
-    if dist_mm < MOVEL_MIN_DIST_MM:
-        print(f"  [{label}] movel 거리 {dist_mm:.1f}mm < {MOVEL_MIN_DIST_MM}mm -- 건너뜀")
-    else:
-        vel_pct = np.clip(strike_speed / MAX_TOOL_SPEED * 100, 10, 100)
-        print(f"  [{label}] Phase 2: MoveL Strike! vel={vel_pct:.0f}%, dist={dist_mm:.0f}mm")
-        indy.movel(list(p_target), vel_ratio=vel_pct, acc_ratio=100)
-        wait_indy()
-        p_after = indy.get_control_data()['p']
-        print(f"    After strike: [{p_after[0]:.1f}, {p_after[1]:.1f}, {p_after[2]:.1f}] mm")
-        verify_movel_reached(p_target)
-        print(f"  [{label}] Strike 완료!")
+    # ======== Phase 2: Strike (MoveJ to follow-through) ========
+    print(f"  [{label}] Phase 2: MoveJ Strike!")
+    indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=300)
+    wait_indy()
+    p_after = indy.get_control_data()['p']
+    print(f"    After strike: [{p_after[0]:.1f}, {p_after[1]:.1f}, {p_after[2]:.1f}] mm")
+    print(f"  [{label}] Strike 완료!")
 
-    # ======== Phase 3: Retract (Home movej) ========
+    # ======== Phase 3: Home ========
     print(f"  [{label}] Phase 3: Home")
     indy.movej(HOME_Q_DEG, vel_ratio=30, acc_ratio=100)
     wait_indy()
@@ -406,9 +381,10 @@ for rnd in range(1, NUM_ROUNDS + 1):
         success = env.is_pocketed()
         print(f"  결과: {'POCKETED!' if success else 'miss'}")
 
-    # 궤적 + 관절각도 + phases 저장, 홈 복귀
+    # 관절각도 저장 (접근 + follow-through), 홈 복귀
     q_traj_deg = np.degrees(np.array(q_traj).reshape(-1, 6))
-    saved_trajectories.append((q_traj_deg, trajectory, phases))
+    q_follow_deg = np.degrees(np.array(q_follow).flatten())
+    saved_trajectories.append((q_traj_deg, q_follow_deg, phases))
     pb.MoveRobot(HOME_Q_DEG, degree=True)
     time.sleep(1)
 
@@ -419,7 +395,7 @@ print(f"{'='*50}")
 
 # %% Step 10: *** 실제 로봇 -- 라운드 재생 (루프) ***
 # [!] E-Stop 버튼에 손 올리고 실행!
-for rnd_idx, (q_traj_d, traj, phs) in enumerate(saved_trajectories):
+for rnd_idx, (q_traj_d, q_follow_d, phs) in enumerate(saved_trajectories):
     rnd_num = rnd_idx + 1
     print("=" * 50)
     print(f"  REAL Round {rnd_num}/{len(saved_trajectories)} 재생")
@@ -427,7 +403,7 @@ for rnd_idx, (q_traj_d, traj, phs) in enumerate(saved_trajectories):
     movej_both(HOME_Q_DEG, wait=True)
     time.sleep(1)
     try:
-        replay_trajectory_on_real(q_traj_d, traj, phases=phs, label=f"Round {rnd_num}")
+        replay_trajectory_on_real(q_traj_d, q_follow_d, phs, label=f"Round {rnd_num}")
     except Exception as e:
         print(f"  [!] Round {rnd_num} 오류: {e}")
         try:
