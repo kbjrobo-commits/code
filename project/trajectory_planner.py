@@ -138,7 +138,8 @@ class StrikeTrajectoryPlanner:
     def plan_strike(self, T_current, ball_pos, strike_direction,
                     strike_speed=0.5, approach_dist=0.08,
                     follow_dist=0.10, strike_height=None,
-                    tool_offset=0.0, tool_rotation=0.0):
+                    tool_offset=0.0, tool_rotation=0.0,
+                    table_bounds=None):
         """완전한 타격 궤적 생성 (ㄴ자 도구 수평 타격)
 
         Args:
@@ -151,6 +152,7 @@ class StrikeTrajectoryPlanner:
             strike_height: 미사용 (하위 호환용으로 유지)
             tool_offset: 미사용 (ㄴ자 도구에서는 자동 계산)
             tool_rotation: 도구 축(z) 주위 회전 φ (rad) — 특이점/관절한계 회피
+            table_bounds: dict {'x_min','x_max','y_min','y_max'} 테이블 범위
 
         Returns:
             trajectory: SE3 리스트

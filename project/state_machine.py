@@ -328,7 +328,8 @@ class AutonomousStateMachine:
                     follow_dist=STRIKE_FOLLOW_DIST,
                     strike_height=strike_height,
                     tool_offset=self.tool_offset,
-                    tool_rotation=phi
+                    tool_rotation=phi,
+                    table_bounds=scan_data.get('table_bounds') if isinstance(scan_data, dict) else None
                 )
 
                 # ?μ븷臾?洹쇱젒 泥댄겕
@@ -535,9 +536,9 @@ class AutonomousStateMachine:
                 if t1_idx >= 0 and t2_idx >= 0:
                     second_idx = max(t1_idx, t2_idx)
                     first_idx = min(t1_idx, t2_idx)
-                    c_total = events[:second_idx].count('c')
+                    c_total = sum(1 for e in events if e == 'c')  # 전체 쿠션 수
                     cushions_before_first = events[:first_idx].count('c')
-                    cushions_between_targets = c_total - cushions_before_first
+                    cushions_between_targets = events[first_idx:second_idx].count('c')
                     if c_total >= 3:
                         valid_3cushion = True
                         rule_case = 'valid-3cushion'

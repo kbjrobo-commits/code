@@ -38,8 +38,20 @@ class CushionShotPlanner:
         SAFE_RADIUS = 0.65
         tilt_rad = np.radians(MAZE_STRIKE_ANGLE_DEG)
 
+        def _angle_priority(angle_rad):
+            """실측 기반 각도 안전도: 50-180° 최우선, 0-30°/330-360° 위험"""
+            deg = np.degrees(angle_rad) % 360
+            if 50 <= deg <= 180:
+                return 0  # 안전 (글랜싱 블로우 없음)
+            elif 30 <= deg < 50 or 180 < deg <= 330:
+                return 1  # 보통
+            else:
+                return 2  # 위험 (글랜싱 블로우 빈발)
+
         def _filter_reachable_diverse(candidates, max_n=15):
-            """도달가능 + 각도 다양성 필터"""
+            """도달가능 + 각도 다양성 필터 (안전 각도 + 적은 쿠션 우선)"""
+            # 안전 각도 우선, 같은 안전도면 쿠션 적은 것 우선 (예측 정확도 ↑)
+            candidates = sorted(candidates, key=lambda r: (_angle_priority(r['angle']), r.get('cushion_count', 99)))
             result = []
             for r in candidates:
                 angle = r['angle']
@@ -60,17 +72,16 @@ class CushionShotPlanner:
                     break
             return result
 
-        # 3쿠션 > 2쿠션 > 전체 순서로 후보 선택
-        valid_3c = [r for r in fast_results if r['score'] >= 3000]
-        valid_2c = [r for r in fast_results if r['score'] >= 2000 and r['score'] < 3000]
-        top_fast = _filter_reachable_diverse(valid_3c, max_n=25)
-        if len(top_fast) < 5:
-            top_fast += _filter_reachable_diverse(valid_2c, max_n=15)
+        # 2쿠션 이상 전부 동등하게 취급 (안전 각도 우선)
+        valid_all = [r for r in fast_results if r['score'] >= 2000]
+        top_fast = _filter_reachable_diverse(valid_all, max_n=25)
         if not top_fast:
             top_fast = _filter_reachable_diverse(fast_results, max_n=15)
         if not top_fast:
             top_fast = [fast_results[0]]
-        print(f"  [Filter] {len(valid_3c)} valid → {len(top_fast)} reachable diverse")
+        n_3c = sum(1 for r in valid_all if r['score'] >= 3000)
+        n_2c = len(valid_all) - n_3c
+        print(f"  [Filter] {n_3c} 3-cushion + {n_2c} 2-cushion → {len(top_fast)} reachable diverse")
 
         # 로봇 환경 생성 + 상위 후보만 검증
         # fast search 결과를 직접 후보로 사용 (headless robot sim 건너뜀)
@@ -639,11 +650,10 @@ class CushionShotPlanner:
         if events and hit_t1 and hit_t2:
             t1_idx = events.index('t1')
             t2_idx = events.index('t2')
-            second_idx = max(t1_idx, t2_idx)
-            c_before_second = events[:second_idx].count('c')
-            if c_before_second >= 3:
+            c_total = sum(1 for e in events if e == 'c')  # 전체 쿠션 수
+            if c_total >= 3:
                 valid_3cushion = True
-            if c_before_second >= 2:
+            if c_total >= 2:
                 valid_2cushion = True
 
         if valid_3cushion:
