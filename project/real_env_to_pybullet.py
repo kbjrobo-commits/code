@@ -3,9 +3,37 @@ import numpy as np
 import pybullet as p
 import pybullet_data
 import time
+import os
+import json
 import pyrealsense2 as rs
 from project.config import *
 from project.environment.maze_env import MazeEnvironment
+
+# 캘리브레이션 오프셋 파일 경로
+_POSITION_CALIB_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                     'calibration_position_offset.json')
+_PHYSICS_CALIB_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                    'calibration_result_physics.npz')
+
+
+def load_position_offset():
+    """위치 캘리브레이션 오프셋 로드. 없으면 (0, 0)."""
+    if os.path.exists(_POSITION_CALIB_FILE):
+        with open(_POSITION_CALIB_FILE, 'r') as f:
+            offset = json.load(f)
+        print(f"  [CALIB] 위치 오프셋 적용: x={offset.get('x',0):.4f}m, y={offset.get('y',0):.4f}m")
+        return offset
+    return {'x': 0.0, 'y': 0.0}
+
+
+def load_physics_calibration():
+    """물리 캘리브레이션 파라미터 로드. 없으면 None."""
+    if os.path.exists(_PHYSICS_CALIB_FILE):
+        calib = np.load(_PHYSICS_CALIB_FILE)
+        params = {k: float(calib[k]) for k in calib.files}
+        print(f"  [CALIB] 물리 파라미터 적용: {params}")
+        return params
+    return None
 
 TABLE_WIDTH_MM = int((MAZE_TABLE_LENGTH + 0.06) * 1000)
 TABLE_HEIGHT_MM = int((MAZE_TABLE_WIDTH + 0.06) * 1000)
@@ -529,13 +557,68 @@ def detect_balls() :
     thickness = 0.03
 
     center = np.array([CX, CY, H])
-    y_offset = - center[1] - W/2 - thickness  # 실측 검증 필요
+    y_offset = - center[1] - W/2 - thickness  # 기본 좌표 변환
 
     cue_pos = [white_ball[0], white_ball[1] + y_offset, ball_h]
     target_pos = [yellow_ball[0], yellow_ball[1] + y_offset, ball_h]
     ball2_pos = [red_ball[0], red_ball[1] + y_offset, ball_h]
 
+    # 캘리브레이션 오프셋 자동 적용
+    pos_offset = load_position_offset()
+    for pos in [cue_pos, target_pos, ball2_pos]:
+        pos[0] += pos_offset.get('x', 0.0)
+        pos[1] += pos_offset.get('y', 0.0)
+
     return cue_pos, target_pos, ball2_pos
+
+
+def wait_real_balls_stop(interval=0.5, threshold_mm=3.0, max_wait=10.0, verbose=True):
+    """카메라로 공 정지 여부 판단.
+
+    interval초 간격으로 2회 촬영 → 3공 모두 위치 변화 < threshold_mm이면 정지.
+    max_wait초 내에 정지 안 하면 타임아웃.
+
+    Returns:
+        (cue_pos, target_pos, ball2_pos) — 최종 정지 위치
+    """
+    import time as _time
+    start = _time.time()
+
+    prev = None
+    while _time.time() - start < max_wait:
+        try:
+            current = detect_balls()
+        except Exception as e:
+            if verbose:
+                print(f"  [STOP] 검출 실패: {e}, 재시도...")
+            _time.sleep(interval)
+            continue
+
+        if prev is not None:
+            # 3공 모두 변위 계산
+            displacements = []
+            for i in range(3):
+                d = np.linalg.norm(
+                    np.array(current[i][:2]) - np.array(prev[i][:2])
+                ) * 1000  # m → mm
+                displacements.append(d)
+
+            max_disp = max(displacements)
+            if verbose:
+                print(f"  [STOP] 변위: cue={displacements[0]:.1f}mm, "
+                      f"t1={displacements[1]:.1f}mm, t2={displacements[2]:.1f}mm")
+
+            if max_disp < threshold_mm:
+                if verbose:
+                    print(f"  [STOP] 공 정지 확인 ({_time.time()-start:.1f}초)")
+                return current
+
+        prev = current
+        _time.sleep(interval)
+
+    if verbose:
+        print(f"  [STOP] 타임아웃 ({max_wait}초), 마지막 위치 반환")
+    return prev if prev is not None else detect_balls()
 
 
 if __name__ == "__main__":

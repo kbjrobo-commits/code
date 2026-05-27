@@ -397,6 +397,18 @@ for rnd_idx, (q_traj_d, q_follow_d, phs) in enumerate(saved_trajectories):
         except:
             pass
         time.sleep(1)
+
+    # 카메라로 공 정지 확인 + 최종 위치 관측
+    if DEMO_TYPE == 'maze':
+        try:
+            from project.real_env_to_pybullet import wait_real_balls_stop
+            print(f"  [OBSERVE] 카메라로 공 정지 대기...")
+            final = wait_real_balls_stop(interval=0.5, threshold_mm=3.0, max_wait=10.0)
+            cue_f, tgt1_f, tgt2_f = final
+            print(f"  최종 위치: cue={cue_f[:2]}, t1={tgt1_f[:2]}, t2={tgt2_f[:2]}")
+        except Exception as e:
+            print(f"  [OBSERVE] 카메라 관측 실패: {e}")
+
     movej_both(HOME_Q_DEG, wait=True)
     print(f"Round {rnd_num} 완료!")
 

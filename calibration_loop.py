@@ -108,10 +108,8 @@ def run_position_calibration(indy, pb, env, ik):
             print(f"  [ERROR] 공 검출 실패: {e}")
             continue
 
-        # 오프셋 적용
-        cue_pos[0] += offset['x']
-        cue_pos[1] += offset['y']
-        print(f"  큐볼 위치 (보정 후): [{cue_pos[0]:.4f}, {cue_pos[1]:.4f}, {cue_pos[2]:.4f}]")
+        # detect_balls()가 캘리브레이션 오프셋을 자동 적용
+        print(f"  큐볼 위치: [{cue_pos[0]:.4f}, {cue_pos[1]:.4f}, {cue_pos[2]:.4f}]")
 
         # 시뮬에서 공 위치 업데이트
         env.setup(cue_pos=cue_pos, target_pos=target_pos, ball2_pos=ball2_pos,
@@ -151,8 +149,7 @@ def run_position_calibration(indy, pb, env, ik):
         print("  카메라로 재확인 중...")
         try:
             cue_pos2, _, _ = detect_balls()
-            cue_pos2[0] += offset['x']
-            cue_pos2[1] += offset['y']
+            # detect_balls()가 오프셋 자동 적용
         except Exception as e:
             print(f"  [ERROR] 재검출 실패: {e}")
             _return_home(indy, pb)
@@ -278,9 +275,7 @@ def run_physics_calibration(indy, pb, env, ik, num_trials=5):
         print("  [SCAN] 카메라로 공 검출...")
         try:
             cue_start, tgt1_start, tgt2_start = detect_balls()
-            cue_start[0] += offset['x']; cue_start[1] += offset['y']
-            tgt1_start[0] += offset['x']; tgt1_start[1] += offset['y']
-            tgt2_start[0] += offset['x']; tgt2_start[1] += offset['y']
+            # detect_balls()가 오프셋 자동 적용
         except Exception as e:
             print(f"  [ERROR] 공 검출 실패: {e}")
             continue
@@ -368,17 +363,14 @@ def run_physics_calibration(indy, pb, env, ik, num_trials=5):
             _return_home(indy, pb)
             continue
 
-        # 6. 공이 멈을 때까지 대기
-        print("  [WAIT] 공 안정화 대기 (3초)...")
-        time.sleep(3.0)
-
-        # 7. 카메라로 최종 위치 촬영
-        print("  [SCAN] 최종 위치 촬영...")
+        # 6. 카메라로 공 정지 대기 + 최종 위치 촬영
+        print("  [WAIT] 공 정지 대기 (카메라 기반)...")
+        from project.real_env_to_pybullet import wait_real_balls_stop
         try:
-            cue_final, tgt1_final, tgt2_final = detect_balls()
-            cue_final[0] += offset['x']; cue_final[1] += offset['y']
-            tgt1_final[0] += offset['x']; tgt1_final[1] += offset['y']
-            tgt2_final[0] += offset['x']; tgt2_final[1] += offset['y']
+            final_positions = wait_real_balls_stop(
+                interval=0.5, threshold_mm=3.0, max_wait=10.0)
+            cue_final, tgt1_final, tgt2_final = final_positions
+            # detect_balls()가 오프셋 자동 적용
         except Exception as e:
             print(f"  [ERROR] 최종 검출 실패: {e}")
             _return_home(indy, pb)
