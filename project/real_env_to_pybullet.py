@@ -514,224 +514,30 @@ def detect_balls() :
         yellow_ball[1] / 1000.0
     ]
 
-    # result = {
-    #     "White balls": white_ball,
-    #     "Red balls": red_ball,
-    #     "Yellow balls": yellow_ball
-    # }
-
+    # 좌표 변환: 카메라(pixel_to_table) → PyBullet 좌표계
+    # pixel_to_table: (0,0)=좌상단 → (TABLE_WIDTH_MM, TABLE_HEIGHT_MM)=우하단
+    # PyBullet: 테이블 중심=(CX, CY)
+    # ※ x_offset 미적용 (카메라 x좌표 ≈ PyBullet x좌표 가정)
+    # ※ y_offset 부호/값은 실측 검증 필요 — calibration_loop.py에서 자동 보정 예정
     L = MAZE_TABLE_LENGTH
     W = MAZE_TABLE_WIDTH
     H = MAZE_TABLE_SURFACE_HEIGHT
     CX = MAZE_TABLE_CENTER_X
     CY = MAZE_TABLE_CENTER_Y
-    CH = MAZE_CUSHION_HEIGHT
     TH = MAZE_TABLE_HEIGHT
     ball_h = H + TH / 2 + MAZE_BALL_RADIUS + 0.001
     thickness = 0.03
 
     center = np.array([CX, CY, H])
+    y_offset = - center[1] - W/2 - thickness  # 실측 검증 필요
 
-    # x_offset = center[0] - L/2
-    y_offset = - center[1] - W/2 - thickness
-    z_offset = MAZE_BALL_RADIUS + H
+    cue_pos = [white_ball[0], white_ball[1] + y_offset, ball_h]
+    target_pos = [yellow_ball[0], yellow_ball[1] + y_offset, ball_h]
+    ball2_pos = [red_ball[0], red_ball[1] + y_offset, ball_h]
 
-    cue_pos = [
-        white_ball[0],
-        white_ball[1] + y_offset,
-        z_offset
-    ]
-
-    target_pos = [
-        yellow_ball[0],
-        yellow_ball[1] + y_offset,
-        z_offset
-    ]
-
-    ball2_pos = [
-        red_ball[0],
-        red_ball[1] + y_offset,
-        z_offset
-    ]
     return cue_pos, target_pos, ball2_pos
 
-# print("\n===== DETECTION RESULT =====")
-# print(result)
 
-# cv2.imshow(
-#     "Warped Result",
-#     warped_color
-# )
-
-# cv2.waitKey(0)
-
-# pipeline.stop()
-# cv2.destroyAllWindows()
-
-
-"""
-아래 부분은 pybullet 환경 구현 하드코딩한 부분
-"""
-
-# p.connect(p.GUI)
-# p.setAdditionalSearchPath(pybullet_data.getDataPath())
-# p.setGravity(0, 0, -9.8)
-# p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
-
-# p.resetDebugVisualizerCamera(
-#     cameraDistance=0.7,
-#     cameraYaw=0,
-#     cameraPitch=-89.9,
-#     cameraTargetPosition=[
-#         MAZE_TABLE_CENTER_X,
-#         MAZE_TABLE_CENTER_Y,
-#         MAZE_TABLE_SURFACE_HEIGHT
-#     ]
-# ) # 카메라 탑뷰로 보여줌
-
-# L = MAZE_TABLE_LENGTH
-# W = MAZE_TABLE_WIDTH
-# H = MAZE_TABLE_SURFACE_HEIGHT
-# CX = MAZE_TABLE_CENTER_X
-# CY = MAZE_TABLE_CENTER_Y
-# CH = MAZE_CUSHION_HEIGHT
-# TH = MAZE_TABLE_HEIGHT
-# ball_h = H + TH / 2 + MAZE_BALL_RADIUS + 0.001
-# mass = MAZE_BALL_MASS
-
-# center = np.array([CX, CY, H])
-
-# col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[L/2, W/2, TH/2])
-# vis = p.createVisualShape(p.GEOM_BOX, halfExtents=[L/2, W/2, TH/2], rgbaColor=COLOR_FELT_GREEN)
-# table_id = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=col,
-#                                           baseVisualShapeIndex=vis,
-#                                           basePosition=[center[0], center[1], center[2]])
-# p.changeDynamics(table_id, -1, lateralFriction=MAZE_BALL_FRICTION, restitution=0.5)
-
-# top_z = center[2] + TH / 2 + CH / 2
-# thickness = 0.03
-
-# configs = [
-#     ([center[0], center[1]+W/2+thickness/2, top_z], [L/2, thickness/2, CH/2]),
-#     ([center[0], center[1]-W/2-thickness/2, top_z], [L/2, thickness/2, CH/2]),
-#     ([center[0]-L/2-thickness/2, center[1], top_z], [thickness/2, W/2, CH/2]),
-#     ([center[0]+L/2+thickness/2, center[1], top_z], [thickness/2, W/2, CH/2]),
-# ]
-# for pos, half_ext in configs:
-#     col = p.createCollisionShape(p.GEOM_BOX, halfExtents=half_ext)
-#     vis = p.createVisualShape(p.GEOM_BOX, halfExtents=half_ext, rgbaColor=COLOR_BROWN)
-#     cid = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=col, baseVisualShapeIndex=vis, basePosition=pos)
-#     p.changeDynamics(cid, -1, restitution=MAZE_CUSHION_RESTITUTION)
-
-# balls = {
-#     "white": {
-#         "rgba": COLOR_WHITE,
-#         "positions": white_ball
-#     },
-
-#     "red": {
-#         "rgba": COLOR_RED,
-#         "positions": red_ball
-#     },
-
-#     "yellow": {
-#         "rgba": COLOR_YELLOW,
-#         "positions": yellow_ball
-#     }
-# }
-
-# x_offset = center[0] - L/2
-# y_offset = center[1] - W/2
-
-# for color_type, info in balls.items():
-#     color=info["rgba"]
-#     pos=info["positions"]
-#     position = [pos[0]+x_offset, pos[1]+y_offset, ball_h]
-#     col = p.createCollisionShape(p.GEOM_SPHERE, radius=MAZE_BALL_RADIUS)
-#     vis = p.createVisualShape(p.GEOM_SPHERE, radius=MAZE_BALL_RADIUS, rgbaColor=color)
-#     bid = p.createMultiBody(baseMass=mass, baseCollisionShapeIndex=col, baseVisualShapeIndex=vis, basePosition=position)
-#     p.changeDynamics(
-#         bid, 
-#         -1,
-#         lateralFriction=MAZE_BALL_FRICTION,
-#         restitution=MAZE_BALL_RESTITUTION,
-#         rollingFriction=MAZE_BALL_ROLLING_FRICTION,
-#         spinningFriction=0.02,
-#         ccdSweptSphereRadius=MAZE_BALL_RADIUS * 0.5,
-#         contactProcessingThreshold=0
-#     )
-
-# while True:
-#     p.stepSimulation()
-#     time.sleep(1/240)
-
-"""
-윗 부분은 pybullet 환경 구현 하드코딩한 부분
-"""
-
-# p.connect(p.GUI)
-# p.setAdditionalSearchPath(pybullet_data.getDataPath())
-# p.setGravity(0, 0, -9.8)
-# p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
-
-# p.resetDebugVisualizerCamera(
-#     cameraDistance=0.7,
-#     cameraYaw=0,
-#     cameraPitch=-89.9,
-#     cameraTargetPosition=[
-#         MAZE_TABLE_CENTER_X,
-#         MAZE_TABLE_CENTER_Y,
-#         MAZE_TABLE_SURFACE_HEIGHT
-#     ]
-# )
-# # 카메라는 그냥 탑뷰로 설정함
-
-# client_id = 0
-
-# env = MazeEnvironment(client_id)
-
-# TH = MAZE_TABLE_HEIGHT
-# H = MAZE_TABLE_SURFACE_HEIGHT
-
-# ball_h = H + TH / 2 + MAZE_BALL_RADIUS + 0.001
-
-# L = MAZE_TABLE_LENGTH
-# W = MAZE_TABLE_WIDTH
-# CX = MAZE_TABLE_CENTER_X
-# CY = MAZE_TABLE_CENTER_Y
-
-# x_offset = CX - L / 2 - 0.03
-# y_offset = CY - W / 2 - 0.03
-
-# cue_pos = [
-#     white_ball[0] + x_offset,
-#     white_ball[1] + y_offset,
-#     ball_h
-# ]
-
-# target_pos = [
-#     yellow_ball[0] + x_offset,
-#     yellow_ball[1] + y_offset,
-#     ball_h
-# ]
-
-# ball2_pos = [
-#     red_ball[0] + x_offset,
-#     red_ball[1] + y_offset,
-#     ball_h
-# ]
-
-# env.setup(
-#     cue_pos=cue_pos,
-#     target_pos=target_pos,
-#     ball2_pos=ball2_pos,
-#     num_obstacles=0
-# )
-
-# while True:
-#     p.stepSimulation()
-#     time.sleep(1 / 240)
-
-if __name__ == "__main__" :
+if __name__ == "__main__":
     result = detect_balls()
-    print(result)
+    print(result)

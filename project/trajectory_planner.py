@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from src.utils import (
     xyzeul2SE3, Rot2Vec, Vec2Rot, eul2Rot, Rot2eul
 )
-from project.config import TOOL_VERTICAL_DROP, TOOL_HORIZONTAL_EXT, PIN_PB_EE_Z_OFFSET
+from project.config import TOOL_VERTICAL_DROP, TOOL_HORIZONTAL_EXT, PIN_PB_EE_Z_OFFSET, TOOL_TIP_RADIUS
 
 
 def _cubic_time_scaling(T_total, num_points):
@@ -190,8 +190,25 @@ class StrikeTrajectoryPlanner:
         T_impact[0:3, 0:3] = R_strike
         T_impact[0:3, 3] = impact_pos
 
-        # 3. Follow-through 위치: 임팩트 후 계속 전진 (수평이므로 Z클램핑 불필요)
+        # 3. Follow-through 위치: 임팩트 후 계속 전진
+        # 도구 tip이 벽을 뚫지 않도록 table bounds 내부로 클램프
         follow_pos = impact_pos + strike_dir * follow_dist
+        if table_bounds is not None:
+            tip_margin = TOOL_TIP_RADIUS + 0.005
+            tip_follow = ball_pos[:2] + strike_dir[:2] * follow_dist
+            # 벽 초과량 계산 → follow_dist 축소
+            overshoot = 0.0
+            if tip_follow[0] < table_bounds['x_min'] + tip_margin:
+                overshoot = max(overshoot, table_bounds['x_min'] + tip_margin - tip_follow[0])
+            if tip_follow[0] > table_bounds['x_max'] - tip_margin:
+                overshoot = max(overshoot, tip_follow[0] - (table_bounds['x_max'] - tip_margin))
+            if tip_follow[1] < table_bounds['y_min'] + tip_margin:
+                overshoot = max(overshoot, table_bounds['y_min'] + tip_margin - tip_follow[1])
+            if tip_follow[1] > table_bounds['y_max'] - tip_margin:
+                overshoot = max(overshoot, tip_follow[1] - (table_bounds['y_max'] - tip_margin))
+            if overshoot > 0:
+                clamped_follow = max(0.01, follow_dist - overshoot)
+                follow_pos = impact_pos + strike_dir * clamped_follow
         T_follow = np.eye(4)
         T_follow[0:3, 0:3] = R_strike
         T_follow[0:3, 3] = follow_pos

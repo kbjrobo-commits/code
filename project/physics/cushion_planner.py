@@ -49,9 +49,11 @@ class CushionShotPlanner:
                 return 2  # 위험 (글랜싱 블로우 빈발)
 
         def _filter_reachable_diverse(candidates, max_n=15):
-            """도달가능 + 각도 다양성 필터 (안전 각도 + 적은 쿠션 우선)"""
+            """도달가능 + 각도 다양성 필터 (안전 각도 + 적은 쿠션 + 벽 뚫림 방지)"""
             # 안전 각도 우선, 같은 안전도면 쿠션 적은 것 우선 (예측 정확도 ↑)
             candidates = sorted(candidates, key=lambda r: (_angle_priority(r['angle']), r.get('cushion_count', 99)))
+            bounds = self.bounds
+            tip_margin = TOOL_TIP_RADIUS  # 큐팁 반경만 (벽 내면에 닿지 않도록)
             result = []
             for r in candidates:
                 angle = r['angle']
@@ -61,6 +63,33 @@ class CushionShotPlanner:
                 ready_pos = cue_3d + ee_offset - strike_dir * STRIKE_APPROACH_DIST
                 if np.linalg.norm(ready_pos[:2]) > SAFE_RADIUS:
                     continue
+
+                # 도구 tip 벽 뚫림 방지: safe_approach_dist 계산
+                # 실제 로봇에서 도구가 벽을 뚫지 않도록 approach_dist를 동적 조정
+                safe_approach = STRIKE_APPROACH_DIST
+                sd2 = strike_dir[:2]
+                cue2 = cue_3d[:2]
+                for axis in [0, 1]:
+                    if abs(sd2[axis]) > 1e-6:
+                        if sd2[axis] > 0:
+                            max_a = (cue2[axis] - (bounds['x_min' if axis==0 else 'y_min'] + tip_margin)) / sd2[axis]
+                        else:
+                            max_a = (cue2[axis] - (bounds['x_max' if axis==0 else 'y_max'] - tip_margin)) / sd2[axis]
+                        if max_a > 0:
+                            safe_approach = min(safe_approach, max_a)
+                min_approach = 0.08  # 최소 8cm — PD 컨트롤러 수렴에 충분한 거리
+                safe_approach = max(min_approach, safe_approach)
+                # 최소 접근거리에서도 벽 밖이면 제외
+                tip_check = cue2 - sd2 * safe_approach
+                if (tip_check[0] < bounds['x_min'] + tip_margin or
+                    tip_check[0] > bounds['x_max'] - tip_margin or
+                    tip_check[1] < bounds['y_min'] + tip_margin or
+                    tip_check[1] > bounds['y_max'] - tip_margin):
+                    continue
+                # approach_dist가 줄었을 때만 저장 (기존 동작 최대한 유지)
+                if safe_approach < STRIKE_APPROACH_DIST:
+                    r['safe_approach_dist'] = safe_approach
+
                 angle_deg = np.degrees(angle) % 360
                 too_close = any(
                     min(abs(angle_deg - np.degrees(e['angle']) % 360),
@@ -102,9 +131,11 @@ class CushionShotPlanner:
                 'hit_t2': r.get('hit_t2', False),
                 'score': r['score'],
                 'angle_deg': np.degrees(r['angle']),
+                'safe_approach_dist': r.get('safe_approach_dist', STRIKE_APPROACH_DIST),
             })
 
-        candidates.sort(key=lambda c: c['score'], reverse=True)
+        # 적은 쿠션 우선 (2쿠션 > 3쿠션, 예측 정확도 ↑), 같으면 score 내림차순
+        candidates.sort(key=lambda c: (c.get('cushion_count', 99), -c['score']))
         print(f"  Found {len(candidates)} diverse candidates")
         if candidates:
             top = candidates[0]
@@ -659,7 +690,7 @@ class CushionShotPlanner:
         if valid_3cushion:
             score += 3000  # 3쿠션
         elif valid_2cushion:
-            score += 2000  # 2쿠션
+            score += 3000  # 2쿠션 (3쿠션과 동등 — 예측 정확도는 2쿠션이 더 높음)
         else:
             if hit_t1: score += 500
             if hit_t2: score += 500

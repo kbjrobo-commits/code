@@ -324,7 +324,7 @@ class AutonomousStateMachine:
                     ball_pos=ball_pos,
                     strike_direction=strike_dir_3d,
                     strike_speed=strike_speed,
-                    approach_dist=STRIKE_APPROACH_DIST,
+                    approach_dist=candidate.get('safe_approach_dist', STRIKE_APPROACH_DIST),
                     follow_dist=STRIKE_FOLLOW_DIST,
                     strike_height=strike_height,
                     tool_offset=self.tool_offset,

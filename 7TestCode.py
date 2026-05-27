@@ -212,7 +212,7 @@ else:  # billiards
 # PD 게인 강화
 robot = pb.my_robot
 def _boosted():
-    qddot = robot._qddot_des + 800*(robot._q_des-robot._q) + 40*(robot._qdot_des-robot._qdot)
+    qddot = robot._qddot_des + 5000*(robot._q_des-robot._q) + 200*(robot._qdot_des-robot._qdot)
     robot._tau = robot._M @ qddot + robot._c + robot._g
 robot._compute_torque_input = _boosted
 time.sleep(3)
@@ -298,7 +298,8 @@ for rnd in range(1, NUM_ROUNDS + 1):
         T_current=T_now, ball_pos=ball_pos, strike_direction=strike_dir_3d,
         strike_speed=speed, approach_dist=STRIKE_APPROACH_DIST,
         follow_dist=STRIKE_FOLLOW_DIST,
-        strike_height=ball_pos[2], tool_offset=tool_offset)
+        strike_height=ball_pos[2], tool_offset=tool_offset,
+        table_bounds=env.table_bounds if hasattr(env, 'table_bounds') else None)
 
     q_traj = ik.solve_trajectory(q_now, trajectory)
     print(f"  궤적: {len(trajectory)} pts (A:{phases['approach'][1]-phases['approach'][0]}"
