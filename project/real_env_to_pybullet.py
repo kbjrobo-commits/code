@@ -253,6 +253,88 @@ def detect_balls() :
 
         return None
 
+    # def detect_ball(mask, frame, color):
+    #     kernel = np.ones((7, 7), np.uint8)
+
+    #     mask = cv2.morphologyEx(
+    #         mask,
+    #         cv2.MORPH_CLOSE,
+    #         kernel
+    #     )
+
+    #     contours, _ = cv2.findContours(
+    #         mask,
+    #         cv2.RETR_EXTERNAL,
+    #         cv2.CHAIN_APPROX_SIMPLE
+    #     )
+
+    #     best_ball = None
+    #     max_score = 0
+
+    #     for cnt in contours:
+    #         area = cv2.contourArea(cnt)
+
+    #         if area < 300:
+    #             continue
+
+    #         perimeter = cv2.arcLength(cnt, True)
+
+    #         if perimeter == 0:
+    #             continue
+
+    #         (circle_cx, circle_cy), radius = cv2.minEnclosingCircle(cnt)
+
+    #         circle_area = np.pi * radius * radius
+
+    #         fill_ratio = area / circle_area
+
+    #         if fill_ratio < 0.35:
+    #             continue
+
+    #         M = cv2.moments(cnt)
+
+    #         if M["m00"] == 0:
+    #             continue
+
+    #         cx = M["m10"] / M["m00"]
+    #         cy = M["m01"] / M["m00"]
+
+    #         table_x, table_y = pixel_to_table(cx, cy)
+
+    #         score = area
+
+    #         if score > max_score:
+
+    #             max_score = score
+
+    #             best_ball = {
+    #                 "position": (
+    #                     float(table_x),
+    #                     float(table_y)
+    #                 ),
+    #                 "center": (cx, cy),
+    #                 "radius": radius
+    #             }
+
+    #     if best_ball is not None:
+    #         cx, cy = best_ball["center"]
+    #         radius = best_ball["radius"]
+
+    #         draw_cx = int(round(cx))
+    #         draw_cy = int(round(cy))
+
+    #         cv2.circle(
+    #             frame,
+    #             (draw_cx, draw_cy),
+    #             int(round(radius)),
+    #             color,
+    #             3
+    #         )
+
+    #         return best_ball["position"]
+
+    #     return None
+
     # 초기 프레임 잡기(더미 촬영)
     for _ in range(30):
         pipeline.wait_for_frames()
@@ -446,28 +528,29 @@ def detect_balls() :
     CH = MAZE_CUSHION_HEIGHT
     TH = MAZE_TABLE_HEIGHT
     ball_h = H + TH / 2 + MAZE_BALL_RADIUS + 0.001
+    thickness = 0.03
 
     center = np.array([CX, CY, H])
 
     # x_offset = center[0] - L/2
-    y_offset = - center[1]
+    y_offset = - center[1] - W/2 - thickness
     z_offset = MAZE_BALL_RADIUS + H
 
     cue_pos = [
         white_ball[0],
-        - (white_ball[1] + y_offset),
+        white_ball[1] + y_offset,
         z_offset
     ]
 
     target_pos = [
         yellow_ball[0],
-        - (yellow_ball[1] + y_offset),
+        yellow_ball[1] + y_offset,
         z_offset
     ]
 
     ball2_pos = [
         red_ball[0],
-        - (red_ball[1] + y_offset),
+        red_ball[1] + y_offset,
         z_offset
     ]
     return cue_pos, target_pos, ball2_pos

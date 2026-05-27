@@ -105,7 +105,7 @@ class MazeEnvironment:
         TH = MAZE_TABLE_HEIGHT
         center = self.table_center
         top_z = center[2] + TH / 2 + CH / 2
-        thickness = 0.04
+        thickness = 0.03
 
         configs = [
             ([center[0], center[1]+W/2+thickness/2, top_z], [L/2, thickness/2, CH/2]),
