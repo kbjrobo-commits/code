@@ -75,17 +75,32 @@ BILLIARD_BALL_ROLLING_FRICTION = 0.02
 BILLIARD_BALL_SPINNING_FRICTION = 0.02
 
 # ============================================================
-# 타격 도구 파라미터 — 컴팩트 헤드 (EE 끝단 직결)
+# 타격 도구 파라미터 — ㄴ자 큐팁 도구
 # ============================================================
-# 자루 없이 EE 끝에 직접 짧은 헤드만 부착
-# → 짧아서 안정적, 무게가 집중되어 임팩트 효과적
-
-TOOL_HEAD_LENGTH = 0.06         # 헤드 길이 (m) — 팔 과신전 없이 적당한 클리어런스
-TOOL_HEAD_RADIUS = 0.018        # 헤드 반지름 (m)
-TOOL_HEAD_MASS = 0.15           # 헤드 물리 질량 (kg) — 운동량 전달과 PD 안정성 균형
+# EE에서 아래로 내려온 뒤 수평으로 뻗는 ㄴ자 형태
+# 끝단에 실제 큐대 팁(13mm) 부착
+#
+#   EE (로봇 끝단)
+#    |
+#    | ← TOOL_VERTICAL_DROP (60mm)
+#    |
+#    └────● ← TOOL_HORIZONTAL_EXT (30mm), 끝에 큐팁
+#
+TOOL_VERTICAL_DROP = 0.06       # EE에서 수직 하강 (m)
+TOOL_HORIZONTAL_EXT = 0.03      # 꺾인 후 수평 연장 (m)
+TOOL_TIP_RADIUS = 0.0065        # 큐팁 반경 (m) — 직경 13mm
+TOOL_TIP_LENGTH = 0.015         # 큐팁 두께 (m)
+TOOL_HEAD_MASS = 0.15           # 도구 물리 질량 (kg)
 HEADLESS_TOOL_MASS = 0.15       # Headless도 동일 질량 (물리 일관성)
-TOOL_HEAD_RESTITUTION = 0.9     # 반발 계수 — 높여서 임팩트 효과 강화
-TOOL_CONSTRAINT_FORCE = 5000    # Constraint 최대 힘 (N) — 높을수록 강성↑
+TOOL_HEAD_RESTITUTION = 0.9     # 반발 계수
+TOOL_CONSTRAINT_FORCE = 5000    # Constraint 최대 힘 (N)
+# Pinocchio FK vs PyBullet EE 프레임 Z 오프셋 보정
+# Pinocchio가 PyBullet보다 ~62mm 높은 EE 위치를 반환 (URDF 프레임 정의 차이)
+# IK 목표를 이만큼 높여서 PyBullet에서 올바른 위치에 도달하도록 보정
+PIN_PB_EE_Z_OFFSET = 0.062
+# 이전 코드 호환용 (직선 도구 시절의 변수 유지)
+TOOL_HEAD_LENGTH = TOOL_VERTICAL_DROP  # attach_compact_tool 호환
+TOOL_HEAD_RADIUS = TOOL_TIP_RADIUS     # attach_compact_tool 호환
 
 # ============================================================
 # 시뮬레이션 Grid Search 파라미터 (미니골프)
@@ -122,7 +137,7 @@ MAZE_TABLE_WIDTH = 0.31           # 테이블 폭 Y (m)
 MAZE_TABLE_HEIGHT = 0.02           # 테이블 두께 (m)
 MAZE_TABLE_SURFACE_HEIGHT = 0.25    # 테이블 바닥면 높이 (m)
 MAZE_TABLE_CENTER_X = 0.345        # 테이블 중심 X (원래 위치 복원)
-MAZE_TABLE_CENTER_Y = 0.54         # 테이블 중심 Y (원래 위치 복원)
+MAZE_TABLE_CENTER_Y = 0.25         # 테이블 중심 Y (원래 위치 복원)
 MAZE_GRID_SPACING = 0.05           # 자석 그리드 간격 (m)
 MAZE_OBSTACLE_RADIUS = 0.015       # 장애물 원기둥 반지름 (m)
 MAZE_OBSTACLE_HEIGHT = 0.05        # 장애물 높이 (m)
@@ -132,8 +147,8 @@ MAZE_BALL_RADIUS = 0.012           # 큐볼 반지름 (m) — 지름 24mm
 MAZE_BALL_MASS = 0.01              # 큐볼 질량 (kg) — 가벼운 공
 MAZE_BALL_RESTITUTION = 0.85       # 큐볼 반발계수
 MAZE_BALL_FRICTION = 0.15           # 실제 당구공 수준 (0.3은 과도)
-MAZE_BALL_ROLLING_FRICTION = 0.005  # 실제 당구대 수준 (0.02는 과도)
-MAZE_STRIKE_ANGLE_DEG = 20         # 타격 각도 — 위에서 20° 비스듬히 (테이블/쿠션 충돌 회피)
+MAZE_BALL_ROLLING_FRICTION = 0.012  # 올림: 실측 기반 보정 (0.008→0.012)
+MAZE_STRIKE_ANGLE_DEG = 0          # 수평 타격 (ㄴ자 도구로 수평으로 침)
 
 # ============================================================
 # 어닐링 탐색 파라미터
@@ -146,3 +161,12 @@ ANNEAL_SIGMA_SPEED = [0.15, 0.05, 0.02]  # 속도 분산 축소 (m/s)
 ANNEAL_SPEED_RANGE = (0.5, 1.8)    # 공 속도 범위 (m/s) — 로봇 달성 가능 범위
 ANNEAL_MAX_CUSHIONS = 6            # 최대 쿠션 반사 횟수
 ANNEAL_ROLLING_FRICTION = MAZE_BALL_ROLLING_FRICTION
+
+# Tool-speed -> cue-ball-speed model. The default gain is the 1D elastic
+# collision estimate using the effective tool head mass and restitution.
+BALL_SPEED_GAIN_SCALE = 1.0
+BALL_SPEED_GAIN = (
+    (1.0 + np.sqrt(TOOL_HEAD_RESTITUTION * MAZE_BALL_RESTITUTION))
+    * TOOL_HEAD_MASS / (TOOL_HEAD_MASS + MAZE_BALL_MASS)
+    * BALL_SPEED_GAIN_SCALE
+)

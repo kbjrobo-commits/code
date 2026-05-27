@@ -191,7 +191,7 @@ elif DEMO_TYPE == 'maze':
     env.disable_robot_env_collision(robot_id)
     env.attach_compact_tool(robot_id, ee_link)
     env.disable_tool_env_collision()
-    tool_offset = TOOL_HEAD_LENGTH + MAZE_BALL_RADIUS
+    tool_offset = MAZE_BALL_RADIUS  # 큐팁이 공 표면에 닿도록 (ㄴ자 오프셋은 planner 내부 처리)
     shot_planner = CushionShotPlanner(table_bounds=env.table_bounds)
     perception = SimPerception(env)
 else:  # billiards

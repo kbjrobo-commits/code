@@ -371,6 +371,12 @@ class RobotController:
         robot._strike_idx = 0
         robot._contact_step = -1
         robot._collision_off = False
+        robot._initial_ball_recorded = False
+        if env is not None:
+            for attr in ['_last_actual_ball_velocity', '_last_actual_ball_speed',
+                         '_last_actual_ball_angle_deg', '_last_tool_contact_step']:
+                if hasattr(env, attr):
+                    delattr(env, attr)
 
         original_thread_pre = self.pb._thread_pre
 
@@ -392,11 +398,24 @@ class RobotController:
                         physicsClientId=client)
                     if len(contacts) > 0:
                         robot._contact_step = robot._strike_idx
-                elif robot._strike_idx - robot._contact_step >= 1:
+                elif robot._strike_idx - robot._contact_step >= 10:
                     _p.setCollisionFilterPair(
                         env.tool_id, env.cue_ball_id, -1, -1, 0,
                         physicsClientId=client)
                     robot._collision_off = True
+                if (robot._contact_step >= 0 and
+                        not robot._initial_ball_recorded and
+                        robot._strike_idx - robot._contact_step >= 1):
+                    cue_vel, _ = _p.getBaseVelocity(env.cue_ball_id,
+                                                    physicsClientId=client)
+                    cue_speed = np.linalg.norm(cue_vel[:2])
+                    cue_angle = (np.degrees(np.arctan2(cue_vel[1], cue_vel[0]))
+                                 if cue_speed > 1e-6 else None)
+                    env._last_actual_ball_velocity = [cue_vel[0], cue_vel[1], cue_vel[2]]
+                    env._last_actual_ball_speed = cue_speed
+                    env._last_actual_ball_angle_deg = cue_angle
+                    env._last_tool_contact_step = robot._contact_step
+                    robot._initial_ball_recorded = True
 
             # ?먮낵-紐⑺몴怨?荑좎뀡 ?묒큺 異붿쟻 (?ㅼ쐷 沅ㅼ쟻 以?異⑸룎 媛먯? ?꾨씫 諛⑹?)
             if env is not None:
@@ -434,9 +453,17 @@ class RobotController:
 
         # 吏꾨떒 濡쒓렇
         if env is not None:
-            cue_vel, _ = _p.getBaseVelocity(env.cue_ball_id, physicsClientId=client)
-            cue_speed = np.linalg.norm(cue_vel[:2])
-            cue_angle = np.degrees(np.arctan2(cue_vel[1], cue_vel[0])) if cue_speed > 1e-6 else None
+            if hasattr(env, '_last_actual_ball_velocity'):
+                cue_vel = env._last_actual_ball_velocity
+                cue_speed = getattr(env, '_last_actual_ball_speed',
+                                    np.linalg.norm(cue_vel[:2]))
+                cue_angle = getattr(env, '_last_actual_ball_angle_deg', None)
+            else:
+                cue_vel, _ = _p.getBaseVelocity(env.cue_ball_id,
+                                                physicsClientId=client)
+                cue_speed = np.linalg.norm(cue_vel[:2])
+                cue_angle = (np.degrees(np.arctan2(cue_vel[1], cue_vel[0]))
+                             if cue_speed > 1e-6 else None)
             contact_at = getattr(robot, '_contact_step', -1)
             env._last_actual_ball_velocity = [cue_vel[0], cue_vel[1], cue_vel[2]]
             env._last_actual_ball_speed = cue_speed
@@ -452,7 +479,8 @@ class RobotController:
         # strike 肄쒕갚 ?쒓굅 + PD 蹂듭썝
         robot._compute_torque_input = original_torque_fn
         for attr in ['_strike_buf', '_strike_idx',
-                      '_contact_step', '_collision_off']:
+                      '_contact_step', '_collision_off',
+                      '_initial_ball_recorded']:
             if hasattr(robot, attr):
                 delattr(robot, attr)
         robot._qdot_des = np.zeros([robot.numJoints, 1])

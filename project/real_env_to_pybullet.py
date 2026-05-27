@@ -5,7 +5,7 @@ import pybullet_data
 import time
 import pyrealsense2 as rs
 from project.config import *
-from preject.environment.maze_env import MazeEnvironment
+from project.environment.maze_env import MazeEnvironment
 
 TABLE_WIDTH_MM = int((MAZE_TABLE_LENGTH + 0.06) * 1000)
 TABLE_HEIGHT_MM = int((MAZE_TABLE_WIDTH + 0.06) * 1000)

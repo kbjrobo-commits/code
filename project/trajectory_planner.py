@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from src.utils import (
     xyzeul2SE3, Rot2Vec, Vec2Rot, eul2Rot, Rot2eul
 )
+from project.config import TOOL_VERTICAL_DROP, TOOL_HORIZONTAL_EXT, PIN_PB_EE_Z_OFFSET
 
 
 def _cubic_time_scaling(T_total, num_points):
@@ -96,27 +97,29 @@ class StrikeTrajectoryPlanner:
         self.traj_planner = TrajectoryPlanner()
 
     def compute_strike_orientation(self, strike_direction, tool_rotation=0.0):
-        """타격 방향에 맞는 엔드이펙터 자세 (Rotation matrix) 계산
+        """ㄴ자 도구용 엔드이펙터 자세 (Rotation matrix) 계산
 
-        EE의 z축(도구 축)이 strike_direction을 향하도록 설정.
-        tool_rotation(φ): z축 주위 회전. 원통 도구의 대칭성을 이용하여
-        특이점/관절한계를 피하는 자유도로 활용.
+        EE의 z축이 아래를 향하고 (도구의 수직 부분이 내려감),
+        EE의 x축이 타격 방향을 향하도록 설정 (도구의 수평 부분이 공을 향함).
+
+        ㄴ자 도구 구조:
+          EE (z축 = 아래)
+           |  ← EE z축 방향
+           |
+           └──● ← EE x축 방향 (strike_dir)
+
+        tool_rotation(φ): z축 주위 회전. 자유도 활용.
         """
         strike_dir = np.array(strike_direction).flatten()
+        # 수평 성분만 사용 (ㄴ자 도구는 수평 타격)
+        strike_dir[2] = 0
         strike_dir = strike_dir / np.linalg.norm(strike_dir)
 
-        # z축: 타격 방향 (도구 축 = strike_dir 방향으로 설정)
-        z_axis = strike_dir.copy()
+        # z축: 아래 (도구의 수직 부분이 내려감)
+        z_axis = np.array([0.0, 0.0, -1.0])
 
-        # x축: world up × z로 수평 방향 결정
-        world_up = np.array([0, 0, 1.0])
-        x_axis = np.cross(world_up, z_axis)
-        x_norm = np.linalg.norm(x_axis)
-        if x_norm < 1e-6:
-            # strike_dir이 world z축과 평행한 경우
-            x_axis = np.array([1, 0, 0])
-        else:
-            x_axis = x_axis / x_norm
+        # x축: 타격 방향 (도구의 수평 부분이 공을 향함)
+        x_axis = strike_dir.copy()
 
         # y축: z × x (오른손 좌표계 완성)
         y_axis = np.cross(z_axis, x_axis)
@@ -136,62 +139,63 @@ class StrikeTrajectoryPlanner:
                     strike_speed=0.5, approach_dist=0.08,
                     follow_dist=0.10, strike_height=None,
                     tool_offset=0.0, tool_rotation=0.0):
-        """완전한 타격 궤적 생성
+        """완전한 타격 궤적 생성 (ㄴ자 도구 수평 타격)
 
         Args:
             T_current: 현재 엔드이펙터 SE3 (4,4)
             ball_pos: 공 위치 [x, y, z]
-            strike_direction: 타격 방향 벡터 [dx, dy, dz] (3D 지원)
+            strike_direction: 타격 방향 벡터 [dx, dy, dz] (수평일 때 dz≈0)
             strike_speed: 타격 속도 (m/s)
             approach_dist: 접근 거리 (m)
             follow_dist: Follow-through 거리 (m)
-            strike_height: 타격 높이 (None이면 공 높이 사용)
-            tool_offset: EE에서 도구 끝까지의 거리 (m)
+            strike_height: 미사용 (하위 호환용으로 유지)
+            tool_offset: 미사용 (ㄴ자 도구에서는 자동 계산)
             tool_rotation: 도구 축(z) 주위 회전 φ (rad) — 특이점/관절한계 회피
 
         Returns:
             trajectory: SE3 리스트
             phase_indices: 각 단계의 인덱스 경계
+
+        ㄴ자 도구 형상:
+          EE
+           |  (TOOL_VERTICAL_DROP)
+           |
+           └──● (TOOL_HORIZONTAL_EXT, 큐팁이 공에 닿음)
+
+        EE 목표 = 공 위치 - strike_dir * TOOL_HORIZONTAL_EXT + [0,0, TOOL_VERTICAL_DROP]
         """
         ball_pos = np.array(ball_pos).flatten()
         strike_dir = np.array(strike_direction).flatten()
         strike_dir = strike_dir / np.linalg.norm(strike_dir)
 
-        if strike_height is not None:
-            ball_pos[2] = strike_height
-
         # 타격 자세 (φ 회전 적용)
         R_strike = self.compute_strike_orientation(strike_dir, tool_rotation)
 
-        # tool_offset 보정: EE 위치를 도구 길이만큼 뒤로 밀어서
-        # 도구 끝(tip)이 공 표면에 도달하도록 함
-        offset = strike_dir * tool_offset
+        # ㄴ자 도구 오프셋: 큐팁이 ball_pos에 도달하려면
+        # EE는 공 뒤쪽(수평) + 공 위(수직)에 위치해야 함
+        # PIN_PB_EE_Z_OFFSET: Pinocchio FK가 PyBullet EE보다 62mm 높으므로 보정
+        ee_offset = -strike_dir * TOOL_HORIZONTAL_EXT + np.array([0, 0, TOOL_VERTICAL_DROP + PIN_PB_EE_Z_OFFSET])
 
-        # 1. 준비 위치: 공 뒤쪽 approach_dist만큼 (+ 도구 길이)
-        ready_pos = ball_pos - strike_dir * approach_dist - offset
+        # 1. 준비 위치: 공 뒤쪽 approach_dist만큼 (+ ㄴ자 오프셋)
+        ready_pos = ball_pos - strike_dir * approach_dist + ee_offset
         T_ready = np.eye(4)
         T_ready[0:3, 0:3] = R_strike
         T_ready[0:3, 3] = ready_pos
 
-        # 2. 임팩트 위치: 도구 끝이 공 표면에 닿는 지점
-        impact_pos = ball_pos - offset
+        # 2. 임팩트 위치: 큐팁이 공 표면에 닿는 지점
+        impact_pos = ball_pos + ee_offset
         T_impact = np.eye(4)
         T_impact[0:3, 0:3] = R_strike
         T_impact[0:3, 3] = impact_pos
 
-        # 3. Follow-through 위치: 임팩트 후 계속 전진
+        # 3. Follow-through 위치: 임팩트 후 계속 전진 (수평이므로 Z클램핑 불필요)
         follow_pos = impact_pos + strike_dir * follow_dist
-        # z 클램핑: 도구 끝이 테이블 면 아래로 내려가지 않도록
-        min_z = ball_pos[2] - offset[2]  # EE가 최소한 공 높이에서 도구 길이만큼 위
-        follow_pos[2] = max(follow_pos[2], min_z)
         T_follow = np.eye(4)
         T_follow[0:3, 0:3] = R_strike
         T_follow[0:3, 3] = follow_pos
 
         # 궤적 생성
         # Phase 1: Approach — 2단계 안전 접근
-        # 기존 직선 접근은 Home→Ready를 직선으로 연결하여 테이블/공 관통 위험
-        # 개선: Home → 상공(공 위 15cm) → Ready(공 뒤)로 2단계 접근
         safe_height = 0.25  # 공 위 25cm 상공 경유 (장애물 충분히 넘김)
         above_pos = ready_pos.copy()
         above_pos[2] = max(ready_pos[2] + safe_height, ball_pos[2] + safe_height)
@@ -204,7 +208,7 @@ class StrikeTrajectoryPlanner:
         rise_traj = self.traj_planner.plan_linear(
             T_current, T_above, rise_duration, self.dt
         )
-        # Stage 2: 상공 → Ready (공 뒤로 수직 하강)
+        # Stage 2: 상공 → Ready (공 뒤로 하강)
         descend_duration = self.approach_duration * 0.4
         descend_traj = self.traj_planner.plan_linear(
             T_above, T_ready, descend_duration, self.dt

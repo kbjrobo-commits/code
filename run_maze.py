@@ -38,7 +38,7 @@ def run_maze(num_obstacles=5, max_attempts=3, view_time=15,
     """?곕━荑좎뀡 ?꾩껜 ?뚯씠?꾨씪???ㅽ뻾"""
 
     print(f"\n{'='*60}")
-    print(f"  3-Cushion Billiards Simulation")
+    print(f"  2-Cushion Billiards Simulation")
     print(f"{'='*60}")
     print(f"  Obstacles: {num_obstacles}")
     print(f"  Attempts: {max_attempts}")
@@ -137,7 +137,7 @@ def run_maze(num_obstacles=5, max_attempts=3, view_time=15,
     if hasattr(env, 'cleanup'):
         env.cleanup()
     controller.disconnect()
-    print(f"\n  3-Cushion simulation finished.\n")
+    print(f"\n  2-Cushion simulation finished.\n")
 
 
 def _generate_maze_plots(controller, env, planner, traj_planner,
@@ -218,7 +218,7 @@ def _generate_maze_plots(controller, env, planner, traj_planner,
 
     # ?? Figure 1: Joint Angles ??
     fig1, axes = plt.subplots(3, 2, figsize=(14, 10))
-    fig1.suptitle('3-CUSHION ??Joint Angles vs Time', fontsize=16, fontweight='bold')
+    fig1.suptitle('2-CUSHION Joint Angles vs Time', fontsize=16, fontweight='bold')
     for i, ax in enumerate(axes.flat):
         q_deg = np.degrees(joint_angles[:, i])
         for phase_name, (start, end) in phases.items():
@@ -236,7 +236,7 @@ def _generate_maze_plots(controller, env, planner, traj_planner,
 
     # ?? Figure 2: Task Space XYZ ??
     fig2, axes2 = plt.subplots(3, 1, figsize=(14, 8), sharex=True)
-    fig2.suptitle('3-CUSHION ??EE Position vs Time', fontsize=16, fontweight='bold')
+    fig2.suptitle('2-CUSHION EE Position vs Time', fontsize=16, fontweight='bold')
     labels = ['X (m)', 'Y (m)', 'Z (m)']
     for i, ax in enumerate(axes2):
         for phase_name, (start, end) in phases.items():
@@ -257,7 +257,7 @@ def _generate_maze_plots(controller, env, planner, traj_planner,
     # ?? Figure 3: 3D Trajectory ??
     fig3 = plt.figure(figsize=(10, 8))
     ax3 = fig3.add_subplot(111, projection='3d')
-    ax3.set_title('3-CUSHION ??3D EE Trajectory', fontsize=14, fontweight='bold')
+    ax3.set_title('2-CUSHION 3D EE Trajectory', fontsize=14, fontweight='bold')
     for phase_name, (start, end) in phases.items():
         ax3.plot(task_positions[start:end, 0], task_positions[start:end, 1],
                  task_positions[start:end, 2],
@@ -277,7 +277,7 @@ def _generate_maze_plots(controller, env, planner, traj_planner,
     # ?? Figure 4: 怨?沅ㅼ쟻 (2D ?됰㈃) ??
     if best.get('ball_path') and len(best['ball_path']) > 1:
         fig4, ax4 = plt.subplots(figsize=(10, 7))
-        ax4.set_title('3-CUSHION ??Planned Ball Trajectory (Headless PyBullet)',
+        ax4.set_title('2-CUSHION Planned Ball Trajectory (Headless PyBullet)',
                        fontsize=14, fontweight='bold')
 
         ball_path = np.array(best['ball_path'])
@@ -327,12 +327,15 @@ def _generate_maze_plots(controller, env, planner, traj_planner,
         ax4.grid(True, alpha=0.3)
 
         events = best.get('events', [])
-        valid_3c = best.get('valid_3cushion', best.get('score', 0) >= 3000)
-        info_text = (f"Score: {best['score']:.0f}  |  Valid3C: {valid_3c}  |  "
-                     f"Cushions: {best.get('cushion_count', 0)}  |  "
+        valid_2c = best.get('valid_2cushion', False)
+        valid_3c = best.get('valid_3cushion', False)
+        info_text = (f"Score: {best['score']:.0f}  |  Valid2C: {valid_2c}  |  "
+                     f"Valid3C: {valid_3c}  |  Cushions: {best.get('cushion_count', 0)}  |  "
                      f"Hit T1: {best.get('hit_t1')}  |  Hit T2: {best.get('hit_t2')}\n"
-                     f"Speed raw/used: {best.get('input_speed_raw', strike_speed):.3f}/"
-                     f"{best.get('ee_speed_used', strike_speed):.3f} m/s  |  Events: {events}")
+                     f"Tool/pred ball speed: "
+                     f"{best.get('tool_speed_cmd', strike_speed):.3f}/"
+                     f"{best.get('pred_ball_speed', best.get('ball_speed', 0.0)):.3f} m/s  |  "
+                     f"Events: {events}")
         ax4.set_xlabel(info_text, fontsize=10)
 
         fig4.tight_layout()
@@ -343,7 +346,7 @@ def _generate_maze_plots(controller, env, planner, traj_planner,
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='3-cushion maze simulation')
+    parser = argparse.ArgumentParser(description='2-cushion maze simulation')
     parser.add_argument('--obstacles', type=int, default=0, help='number of obstacles (default: 0)')
     parser.add_argument('--attempts', type=int, default=3, help='number of attempts (default: 3)')
     parser.add_argument('--view-time', type=int, default=15, help='result viewing time in seconds')

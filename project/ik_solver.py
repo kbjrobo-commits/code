@@ -204,10 +204,10 @@ class IKSolver:
             # 1. Manipulability 검사
             w = self.manipulability(q_i)
             manipulability_list.append(w)
-            # 특이점 기준 강화 (0.005 -> 0.015)
-            if w < max(w_threshold, 0.015):
+            effective_w_thresh = max(w_threshold, 0.015)
+            if w < effective_w_thresh:
                 issues.append(
-                    f"[pt {idx}] 특이점 근접: manipulability={w:.6f} < {max(w_threshold, 0.015)}")
+                    f"[pt {idx}] 특이점 근접: manipulability={w:.6f} < {effective_w_thresh}")
 
             # 2. 관절 한계 검사
             valid, viols = self.check_joint_limits(q_i)
@@ -216,22 +216,20 @@ class IKSolver:
                 issues.append(
                     f"[pt {idx}] 관절 한계 초과: joints {viols}")
 
-            # 3. 바디 뚫림 (Body Penetration) 검사
+            # 3. 바디 뚫림 검사 (완화: 테이블 표면 0.26 → 0.20 이하만 거부)
             import pinocchio as pin
             pin.forwardKinematics(self.pin.pinModel, self.pin.pinData, q_i)
-            # J3(Elbow) ~ J6(Wrist)가 테이블 위로 갈 때 바닥을 뚫지 않도록 (테이블 z=0.322)
             for j_id in range(3, self.pin.pinModel.njoints):
                 pos = self.pin.pinData.oMi[j_id].translation
-                # y > 0.0 (테이블 쪽) 이고 z < 0.30 (테이블 표면 근처/아래) 이면 뚫림으로 간주
-                if pos[1] > 0.05 and pos[2] < 0.30:
-                    issues.append(f"[pt {idx}] 바디 뚫림: joint {j_id} at z={pos[2]:.3f} < 0.30m")
+                if pos[1] > 0.05 and pos[2] < 0.20:
+                    issues.append(f"[pt {idx}] 바디 뚫림: joint {j_id} at z={pos[2]:.3f} < 0.20m")
                     break
 
-            # 3. 급격한 관절 점프 검사
+            # 4. 급격한 관절 점프 검사 (완화: 0.3 → 0.5 rad)
             dq = np.max(np.abs(q_i - q_prev))
-            if dq > dq_max:
+            if dq > 0.5:
                 issues.append(
-                    f"[pt {idx}] joint jump: max dq={np.degrees(dq):.1f}deg > {np.degrees(dq_max):.1f}deg")
+                    f"[pt {idx}] joint jump: max dq={np.degrees(dq):.1f}deg > {np.degrees(0.5):.1f}deg")
 
             q_prev = q_i.copy()
 

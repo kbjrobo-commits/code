@@ -12,6 +12,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from project.config import *
+from project.physics.cushion_rules import CushionContactTracker
 
 
 class MazeEnvironment:
@@ -76,7 +77,7 @@ class MazeEnvironment:
         else:
             self._place_obstacles_random(num_obstacles, seed)
 
-        print(f"[Maze] Environment setup complete (3-cushion)")
+        print(f"[Maze] Environment setup complete (2-cushion)")
         print(f"  Table: {L}m x {W}m, center Y={CY}")
         print(f"  Cue (white): {cue_pos}")
         print(f"  Target1 (yellow): {target_pos}")
@@ -262,36 +263,66 @@ class MazeEnvironment:
     def wait_balls_stop(self, timeout=10.0, check_interval=0.1):
         """Wait until balls stop while tracking contacts."""
         import time
-        self._contact_hit_t1 = getattr(self, '_contact_hit_t1', False)
-        self._contact_hit_t2 = getattr(self, '_contact_hit_t2', False)
-        self._cushion_contacts = getattr(self, '_cushion_contacts', 0)
-        self._contact_events = getattr(self, '_contact_events', [])
-        self._contact_cushion_set = getattr(self, '_contact_cushion_set', set())
-        self._contact_cushion_count = getattr(self, '_contact_cushion_count', 0)
+        tracker = getattr(self, '_contact_tracker', None)
+        if tracker is None:
+            tracker = CushionContactTracker(
+                self.target_ball_id,
+                getattr(self, 'ball2_id', None),
+                self.cushion_ids,
+            )
+            tracker.hit_t1 = getattr(self, '_contact_hit_t1', False)
+            tracker.hit_t2 = getattr(self, '_contact_hit_t2', False)
+            tracker.events = list(getattr(self, '_contact_events', []))
+            tracker.cushion_count = int(getattr(self, '_contact_cushion_count', 0))
+            tracker._prev_cushions = set(getattr(self, '_contact_cushion_set', set()))
+            self._contact_tracker = tracker
+        legacy_events = list(getattr(self, '_contact_events', []))
+        if len(legacy_events) >= len(tracker.events):
+            tracker.events = legacy_events
+        tracker.hit_t1 = tracker.hit_t1 or getattr(self, '_contact_hit_t1', False)
+        tracker.hit_t2 = tracker.hit_t2 or getattr(self, '_contact_hit_t2', False)
+        tracker.cushion_count = max(
+            tracker.cushion_count,
+            int(getattr(self, '_contact_cushion_count', 0)),
+        )
+        tracker._prev_cushions = set(getattr(self, '_contact_cushion_set', tracker._prev_cushions))
         start = time.time()
         while time.time() - start < timeout:
-            # ?묒큺 異붿쟻
+            # 접촉 추적 (240Hz _contact_tracking_pre의 보조 — 놓친 것만 보충)
             contacts = p.getContactPoints(bodyA=self.cue_ball_id,
                                           physicsClientId=self.client)
-            cur_cushion = set()
-            for c in contacts:
-                if c[2] == self.target_ball_id and not self._contact_hit_t1:
-                    self._contact_hit_t1 = True
-                    self._contact_events.append('t1')
-                elif c[2] == self.ball2_id and not self._contact_hit_t2:
-                    self._contact_hit_t2 = True
-                    self._contact_events.append('t2')
-                elif c[2] in self.cushion_ids:
-                    cur_cushion.add(c[2])
-            new_cushions = cur_cushion - self._contact_cushion_set
-            for _ in new_cushions:
-                self._contact_cushion_count += 1
-                self._contact_events.append('c')
-            self._contact_cushion_set = cur_cushion
+            tracker.update_from_contacts(contacts)
+            # 240Hz pre-hook이 이미 env에 쓴 값과 tracker 값을 병합
+            # (둘 중 더 많은 이벤트를 유지)
+            if len(tracker.events) > len(getattr(self, '_contact_events', [])):
+                self._contact_events = list(tracker.events)
+                self._contact_hit_t1 = tracker.hit_t1
+                self._contact_hit_t2 = tracker.hit_t2
+                self._contact_cushion_count = tracker.cushion_count
+                self._contact_cushion_set = set(tracker._prev_cushions)
+                self._cushion_contacts = tracker.cushion_count
+            else:
+                # 240Hz hook이 더 많이 잡았으면 tracker에 반영
+                tracker.events = list(getattr(self, '_contact_events', []))
+                tracker.hit_t1 = getattr(self, '_contact_hit_t1', False)
+                tracker.hit_t2 = getattr(self, '_contact_hit_t2', False)
+                tracker.cushion_count = max(tracker.cushion_count,
+                                            int(getattr(self, '_contact_cushion_count', 0)))
             if self.are_balls_stopped():
                 return True
             time.sleep(check_interval)
         return False
+
+    def _sync_contact_tracker_state(self):
+        tracker = getattr(self, '_contact_tracker', None)
+        if tracker is None:
+            return
+        self._contact_hit_t1 = tracker.hit_t1
+        self._contact_hit_t2 = tracker.hit_t2
+        self._contact_events = list(tracker.events)
+        self._contact_cushion_count = tracker.cushion_count
+        self._contact_cushion_set = set(tracker._prev_cushions)
+        self._cushion_contacts = tracker.cushion_count
 
     def reset_contact_tracking(self):
         """???쇱슫???쒖옉 ???묒큺 異붿쟻 由ъ뀑"""
@@ -301,6 +332,11 @@ class MazeEnvironment:
         self._contact_events = []
         self._contact_cushion_set = set()
         self._contact_cushion_count = 0
+        self._contact_tracker = CushionContactTracker(
+            self.target_ball_id,
+            getattr(self, 'ball2_id', None),
+            self.cushion_ids,
+        )
 
     def reset_balls(self, cue_pos=None, target_pos=None, ball2_pos=None):
         """怨??꾩튂 由ъ뀑 ??None?대㈃ ?대떦 怨듭? 嫄대뱶由ъ? ?딆쓬"""
@@ -325,26 +361,44 @@ class MazeEnvironment:
     def attach_compact_tool(self, robot_id, ee_link_index,
                             head_length=None, head_radius=None,
                             head_mass=None, head_restitution=None):
-        """Attach a compact strike tool to the end effector."""
-        if head_length is None: head_length = TOOL_HEAD_LENGTH
-        if head_radius is None: head_radius = TOOL_HEAD_RADIUS
+        """ㄴ자 큐팁 도구를 EE에 부착.
+
+        도구 형상:
+          EE
+           |  (TOOL_VERTICAL_DROP = 60mm 수직 하강)
+           |
+           └──● (TOOL_HORIZONTAL_EXT = 30mm 수평 연장, 끝에 큐팁)
+
+        PyBullet에서는 큐팁(작은 실린더)만 충돌체로 모델링하고,
+        parentFramePosition으로 EE 대비 오프셋을 설정합니다.
+        큐팁 실린더의 축은 EE의 z축(수직)과 직교하는 수평 방향입니다.
+        """
+        tip_radius = TOOL_TIP_RADIUS
+        tip_length = TOOL_TIP_LENGTH
         if head_mass is None: head_mass = TOOL_HEAD_MASS
         if head_restitution is None: head_restitution = TOOL_HEAD_RESTITUTION
 
-        head_col = p.createCollisionShape(p.GEOM_CYLINDER, radius=head_radius,
-                                          height=head_length, physicsClientId=self.client)
-        head_vis = p.createVisualShape(p.GEOM_CYLINDER, radius=head_radius,
-                                       length=head_length, rgbaColor=COLOR_STEEL,
+        # 큐팁 충돌체 (작은 수평 실린더)
+        head_col = p.createCollisionShape(p.GEOM_CYLINDER, radius=tip_radius,
+                                          height=tip_length, physicsClientId=self.client)
+        head_vis = p.createVisualShape(p.GEOM_CYLINDER, radius=tip_radius,
+                                       length=tip_length, rgbaColor=COLOR_STEEL,
                                        physicsClientId=self.client)
         head_id = p.createMultiBody(baseMass=head_mass, baseCollisionShapeIndex=head_col,
                                     baseVisualShapeIndex=head_vis,
                                     basePosition=[0, 0, 0], physicsClientId=self.client)
         p.changeDynamics(head_id, -1, restitution=head_restitution,
                          lateralFriction=0.3, physicsClientId=self.client)
+
+        # ㄴ자 오프셋: EE 로컬 프레임 (Z=아래, X=타격방향)
+        # 수직 부분 = EE +Z (아래로 60mm), 수평 부분 = EE +X (앞으로 30mm)
+        # 큐팁 실린더 축을 EE X축(타격방향)으로 회전 → 평평한 면이 공을 향함
+        tip_orn = p.getQuaternionFromEuler([0, np.pi/2, 0])
         cid = p.createConstraint(parentBodyUniqueId=robot_id, parentLinkIndex=ee_link_index,
                                  childBodyUniqueId=head_id, childLinkIndex=-1,
                                  jointType=p.JOINT_FIXED, jointAxis=[0, 0, 0],
-                                 parentFramePosition=[0, 0, head_length / 2],
+                                 parentFramePosition=[TOOL_HORIZONTAL_EXT, 0, TOOL_VERTICAL_DROP],
+                                 parentFrameOrientation=tip_orn,
                                  childFramePosition=[0, 0, 0],
                                  physicsClientId=self.client)
         p.changeConstraint(cid, maxForce=TOOL_CONSTRAINT_FORCE, physicsClientId=self.client)

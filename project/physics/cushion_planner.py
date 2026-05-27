@@ -38,23 +38,21 @@ class CushionShotPlanner:
         SAFE_RADIUS = 0.65
         tilt_rad = np.radians(MAZE_STRIKE_ANGLE_DEG)
 
-        def _filter_reachable_diverse(candidates, max_n=10):
+        def _filter_reachable_diverse(candidates, max_n=15):
             """도달가능 + 각도 다양성 필터"""
             result = []
             for r in candidates:
                 angle = r['angle']
-                strike_dir = np.array([
-                    np.cos(angle) * np.cos(tilt_rad),
-                    np.sin(angle) * np.cos(tilt_rad),
-                    -np.sin(tilt_rad)
-                ])
-                ready_pos = cue_3d - strike_dir * (TOOL_HEAD_LENGTH + STRIKE_APPROACH_DIST)
+                strike_dir = np.array([np.cos(angle), np.sin(angle), 0.0])
+                # ㄴ자 도구: EE는 공 뒤쪽 + 위쪽에 위치
+                ee_offset = -strike_dir * TOOL_HORIZONTAL_EXT + np.array([0, 0, TOOL_VERTICAL_DROP])
+                ready_pos = cue_3d + ee_offset - strike_dir * STRIKE_APPROACH_DIST
                 if np.linalg.norm(ready_pos[:2]) > SAFE_RADIUS:
                     continue
                 angle_deg = np.degrees(angle) % 360
                 too_close = any(
                     min(abs(angle_deg - np.degrees(e['angle']) % 360),
-                        360 - abs(angle_deg - np.degrees(e['angle']) % 360)) < 15
+                        360 - abs(angle_deg - np.degrees(e['angle']) % 360)) < 5
                     for e in result)
                 if not too_close:
                     result.append(r)
@@ -62,45 +60,38 @@ class CushionShotPlanner:
                     break
             return result
 
-        # 3쿠션 유효 후보 우선
+        # 3쿠션 > 2쿠션 > 전체 순서로 후보 선택
         valid_3c = [r for r in fast_results if r['score'] >= 3000]
-        top_fast = _filter_reachable_diverse(valid_3c, max_n=10)
+        valid_2c = [r for r in fast_results if r['score'] >= 2000 and r['score'] < 3000]
+        top_fast = _filter_reachable_diverse(valid_3c, max_n=25)
+        if len(top_fast) < 5:
+            top_fast += _filter_reachable_diverse(valid_2c, max_n=15)
         if not top_fast:
-            # 유효 후보 없으면 전체에서 선택 (fallback)
-            top_fast = _filter_reachable_diverse(fast_results, max_n=10)
+            top_fast = _filter_reachable_diverse(fast_results, max_n=15)
         if not top_fast:
             top_fast = [fast_results[0]]
         print(f"  [Filter] {len(valid_3c)} valid → {len(top_fast)} reachable diverse")
 
         # 로봇 환경 생성 + 상위 후보만 검증
-        env = self._create_robot_env(cue_3d, tgt1_3d, tgt2_3d, obstacles)
-        (sim_id, cue_id, tgt1_id, tgt2_id, cushion_ids, obstacle_ids,
-         tool_id, robot_id, movable_joints, ee_link, tool_cid,
-         ik_solver, pin_model) = env
-
+        # fast search 결과를 직접 후보로 사용 (headless robot sim 건너뜀)
+        # 이유: headless robot sim과 GUI의 물리 차이로 인해 headless 예측이 부정확.
+        # fast search의 공 속도/각도가 GUI와 0.3° 이내로 일치하므로 직접 사용.
         candidates = []
         for r in top_fast:
-            score, info = self._simulate_one(
-                sim_id, cue_id, tgt1_id, tgt2_id, cushion_ids, tool_id,
-                robot_id, movable_joints, ik_solver, pin_model,
-                cue_3d, tgt1_3d, tgt2_3d, r['angle'], r['speed'])
             strike_dir = np.array([np.cos(r['angle']), np.sin(r['angle'])])
-            ee_speed = min(r['speed'], MAX_TOOL_SPEED)
             candidates.append({
                 'strike_dir': strike_dir,
-                'strike_speed': ee_speed,
-                'ball_speed': ee_speed,
-                'ball_path': info.get('cue_path'),
-                'tgt1_path': info.get('tgt1_path'),
-                'tgt2_path': info.get('tgt2_path'),
-                'cushion_count': info.get('cushion_count', 0),
-                'hit_t1': info.get('hit_t1', False),
-                'hit_t2': info.get('hit_t2', False),
-                'score': score,
+                'strike_speed': MAX_TOOL_SPEED,
+                'ball_speed': MAX_TOOL_SPEED,
+                'ball_path': r.get('cue_path'),
+                'tgt1_path': r.get('tgt1_path'),
+                'tgt2_path': r.get('tgt2_path'),
+                'cushion_count': r.get('cushion_count', 0),
+                'hit_t1': r.get('hit_t1', False),
+                'hit_t2': r.get('hit_t2', False),
+                'score': r['score'],
                 'angle_deg': np.degrees(r['angle']),
             })
-
-        p.disconnect(sim_id)
 
         candidates.sort(key=lambda c: c['score'], reverse=True)
         print(f"  Found {len(candidates)} diverse candidates")
@@ -142,7 +133,7 @@ class CushionShotPlanner:
         # 쿠션
         CH = MAZE_CUSHION_HEIGHT
         top_z = center[2] + TH / 2 + CH / 2
-        thickness = 0.04
+        thickness = 0.03  # GUI maze_env.py와 동일
         configs = [
             ([center[0], center[1]+W/2+thickness/2, top_z], [L/2, thickness/2, CH/2]),
             ([center[0], center[1]-W/2-thickness/2, top_z], [L/2, thickness/2, CH/2]),
@@ -186,19 +177,19 @@ class CushionShotPlanner:
         # Grid Search: 0 ~ 360도를 0.5도 간격으로 촘촘하게 탐색
         n_initial = 720
         speed_lo, speed_hi = ANNEAL_SPEED_RANGE
-        # 도구 질량(0.15)이 공 질량(0.01)보다 훨씬 커서, 툴 속도의 약 1.8배로 공이 튕겨나감
-        # 따라서 공의 최대 탐색 속도를 MAX_TOOL_SPEED로 제한하면 안 됨!
-        speed_hi = min(speed_hi, MAX_TOOL_SPEED * 1.8)
+        # 도구 1.0m/s → 공 ~1.85m/s (실측). 다양한 속도로 탐색
+        speed_hi = min(speed_hi, 1.85)
+        test_speeds = [speed_hi, speed_hi * 0.75, speed_hi * 0.5]
         angles = np.linspace(0, 2 * np.pi, n_initial, endpoint=False)
-        speeds = np.full(n_initial, speed_hi)
 
         results = []
-        for i in range(n_initial):
-            score, info = self._simulate_ball_only(
-                sim, cue_id, tgt1_id, tgt2_id, cushion_ids,
-                cue_pos, tgt1_pos, tgt2_pos, angles[i], speeds[i])
-            results.append({'angle': angles[i], 'speed': speeds[i],
-                            'score': score, **info})
+        for spd in test_speeds:
+            for i in range(n_initial):
+                score, info = self._simulate_ball_only(
+                    sim, cue_id, tgt1_id, tgt2_id, cushion_ids,
+                    cue_pos, tgt1_pos, tgt2_pos, angles[i], spd)
+                results.append({'angle': angles[i], 'speed': spd,
+                                'score': score, **info})
 
         for rnd in range(ANNEAL_N_REFINE_ROUNDS):
             results.sort(key=lambda r: r['score'], reverse=True)
@@ -315,7 +306,7 @@ class CushionShotPlanner:
         # 쿠션 4면
         CH = MAZE_CUSHION_HEIGHT
         top_z = center[2] + TH / 2 + CH / 2
-        thickness = 0.04
+        thickness = 0.03  # GUI maze_env.py와 동일
         configs = [
             ([center[0], center[1]+W/2+thickness/2, top_z], [L/2, thickness/2, CH/2]),
             ([center[0], center[1]-W/2-thickness/2, top_z], [L/2, thickness/2, CH/2]),
@@ -393,18 +384,21 @@ class CushionShotPlanner:
                                     force=0, physicsClientId=sim)
         ee_link = 6
 
-        # 도구 + constraint
-        tool_col = p.createCollisionShape(p.GEOM_CYLINDER, radius=TOOL_HEAD_RADIUS,
-                                          height=TOOL_HEAD_LENGTH, physicsClientId=sim)
+        # 도구 + constraint (GUI maze_env.py와 동일한 ㄴ자 도구)
+        tool_col = p.createCollisionShape(p.GEOM_CYLINDER, radius=TOOL_TIP_RADIUS,
+                                          height=TOOL_TIP_LENGTH, physicsClientId=sim)
         tool_id = p.createMultiBody(baseMass=TOOL_HEAD_MASS,
                                     baseCollisionShapeIndex=tool_col,
                                     basePosition=[0, 0, 0], physicsClientId=sim)
         p.changeDynamics(tool_id, -1, restitution=TOOL_HEAD_RESTITUTION,
                          lateralFriction=0.3, physicsClientId=sim)
+        # ㄴ자 오프셋: EE +X 방향으로 30mm, EE +Z 방향으로 60mm (EE z=아래)
+        tip_orn = p.getQuaternionFromEuler([0, np.pi/2, 0])
         tool_cid = p.createConstraint(
             robot_id, ee_link, tool_id, -1,
             jointType=p.JOINT_FIXED, jointAxis=[0, 0, 0],
-            parentFramePosition=[0, 0, TOOL_HEAD_LENGTH / 2],
+            parentFramePosition=[TOOL_HORIZONTAL_EXT, 0, TOOL_VERTICAL_DROP],
+            parentFrameOrientation=tip_orn,
             childFramePosition=[0, 0, 0], physicsClientId=sim)
         p.changeConstraint(tool_cid, maxForce=TOOL_CONSTRAINT_FORCE,
                            physicsClientId=sim)
@@ -467,28 +461,21 @@ class CushionShotPlanner:
                                               physicsClientId=sim_id)
             p.resetBaseVelocity(tgt2_id, [0,0,0], [0,0,0], physicsClientId=sim_id)
 
-        # 타격 방향 (20° 비스듬히 — GUI와 동일)
-        tilt_rad = np.radians(MAZE_STRIKE_ANGLE_DEG)
-        strike_dir = np.array([
-            np.cos(angle) * np.cos(tilt_rad),
-            np.sin(angle) * np.cos(tilt_rad),
-            -np.sin(tilt_rad)
-        ])
+        # 타격 방향 (수평)
+        strike_dir = np.array([np.cos(angle), np.sin(angle), 0.0])
         strike_dir /= np.linalg.norm(strike_dir)
 
-        # SE3 계산 — 도구 끝이 공 중심을 향함
+        # SE3 계산 — ㄴ자 도구: EE z축=아래, x축=strike방향
         ball_pos = np.array(cue_start)
-        impact_ee = ball_pos - strike_dir * (TOOL_HEAD_LENGTH + 0.012)  # tip이 ball surface에 도달
+        # GUI trajectory_planner.py와 동일한 EE 오프셋
+        ee_offset = -strike_dir * TOOL_HORIZONTAL_EXT + np.array([0, 0, TOOL_VERTICAL_DROP + PIN_PB_EE_Z_OFFSET])
+        impact_ee = ball_pos + ee_offset
         ready_ee = impact_ee - strike_dir * STRIKE_APPROACH_DIST
         follow_ee = impact_ee + strike_dir * STRIKE_FOLLOW_DIST
 
-        # EE orientation (z축 = strike_dir)
-        z_ax = strike_dir
-        up = np.array([0, 0, 1.0])
-        x_ax = np.cross(up, z_ax)
-        if np.linalg.norm(x_ax) < 1e-6:
-            x_ax = np.array([1, 0, 0.0])
-        x_ax /= np.linalg.norm(x_ax)
+        # EE orientation: z축=아래, x축=strike방향 (GUI와 동일)
+        z_ax = np.array([0, 0, -1.0])
+        x_ax = strike_dir.copy(); x_ax[2] = 0; x_ax /= np.linalg.norm(x_ax)
         y_ax = np.cross(z_ax, x_ax)
         R = np.column_stack([x_ax, y_ax, z_ax])
 
@@ -646,20 +633,23 @@ class CushionShotPlanner:
         score = 0
         cue_final, _ = p.getBasePositionAndOrientation(cue_id, physicsClientId=sim_id)
 
-        # 순서 검증
+        # 순서 검증 (3쿠션 + 2쿠션)
         valid_3cushion = False
+        valid_2cushion = False
         if events and hit_t1 and hit_t2:
             t1_idx = events.index('t1')
             t2_idx = events.index('t2')
-            if t1_idx < t2_idx:
-                if events[:t2_idx].count('c') >= 3:
-                    valid_3cushion = True
-            else:
-                if events[:t1_idx].count('c') >= 3:
-                    valid_3cushion = True
+            second_idx = max(t1_idx, t2_idx)
+            c_before_second = events[:second_idx].count('c')
+            if c_before_second >= 3:
+                valid_3cushion = True
+            if c_before_second >= 2:
+                valid_2cushion = True
 
         if valid_3cushion:
-            score += 3000  # 완벽한 3쿠션
+            score += 3000  # 3쿠션
+        elif valid_2cushion:
+            score += 2000  # 2쿠션
         else:
             if hit_t1: score += 500
             if hit_t2: score += 500

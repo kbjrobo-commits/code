@@ -1,4 +1,4 @@
-﻿"""
+"""
 ?먯쑉 猷⑦봽 State Machine
 =========================
 SCAN ??THINK ??ALIGN & STRIKE ??OBSERVE & RECALCULATE
@@ -280,7 +280,11 @@ class AutonomousStateMachine:
         candidates = plan.get('candidates', [plan])
 
         q_current = self.controller.get_current_q()
-        phi_candidates = np.linspace(0, 2 * np.pi, 12, endpoint=False)
+        # ㄴ자 도구는 비대칭 → phi 회전하면 도구 끝이 공에서 벗어남
+        if self.demo_type == 'maze':
+            phi_candidates = [0.0]
+        else:
+            phi_candidates = np.linspace(0, 2 * np.pi, 12, endpoint=False)
 
         # === ?꾨낫 ?쒗쉶: 媛??꾨낫 횞 媛?? 議고빀 ?쒕룄 ===
         found = False
@@ -376,7 +380,12 @@ class AutonomousStateMachine:
                 phases = best_phases
                 break
             else:
-                reason = "IK invalid" if best_result else "obstacle collision"
+                if best_result is not None:
+                    reason = "IK invalid (joint limits or singularity)"
+                elif not obstacle_clear:
+                    reason = "obstacle collision"
+                else:
+                    reason = "IK validation failed"
                 print(f"  [SKIP] Candidate #{ci+1} (angle={candidate['angle_deg']:.1f}deg): {reason}")
 
         if not found:
@@ -514,6 +523,7 @@ class AutonomousStateMachine:
 
             # 3荑좎뀡 ?쒖꽌 寃利?
             valid_3cushion = False
+            valid_2cushion = False
             rule_case = 'missing-target-contact'
             cushions_before_first = 0
             cushions_between_targets = 0
@@ -523,34 +533,32 @@ class AutonomousStateMachine:
                 t1_idx = events.index('t1') if 't1' in events else -1
                 t2_idx = events.index('t2') if 't2' in events else -1
                 if t1_idx >= 0 and t2_idx >= 0:
-                    if t1_idx < t2_idx:
-                        c_total = events[:t2_idx].count('c')
-                        cushions_before_first = events[:t1_idx].count('c')
-                        cushions_between_targets = events[t1_idx+1:t2_idx].count('c')
-                        if c_total >= 3:
-                            valid_3cushion = True
-                            rule_case = 'normal'
-                        else:
-                            rule_case = 'both-hit-not-enough-cushions'
+                    second_idx = max(t1_idx, t2_idx)
+                    first_idx = min(t1_idx, t2_idx)
+                    c_total = events[:second_idx].count('c')
+                    cushions_before_first = events[:first_idx].count('c')
+                    cushions_between_targets = c_total - cushions_before_first
+                    if c_total >= 3:
+                        valid_3cushion = True
+                        rule_case = 'valid-3cushion'
+                    elif c_total >= 2:
+                        valid_2cushion = True
+                        rule_case = 'valid-2cushion'
                     else:
-                        c_total = events[:t1_idx].count('c')
-                        cushions_before_first = events[:t2_idx].count('c')
-                        cushions_between_targets = events[t2_idx+1:t1_idx].count('c')
-                        if c_total >= 3:
-                            valid_3cushion = True
-                            rule_case = 'reverse-order'
-                        else:
-                            rule_case = 'both-hit-not-enough-cushions'
+                        rule_case = 'both-hit-not-enough-cushions'
 
-            print(f"  3-cushion: events={events}, cushions={cushion_count}")
-            print(f"  3-cushion detail: hit_t1={hit_t1}, hit_t2={hit_t2}, "
+            print(f"  Cushion result: events={events}, cushions={cushion_count}")
+            print(f"  Detail: hit_t1={hit_t1}, hit_t2={hit_t2}, "
                   f"before_first={cushions_before_first}, "
                   f"between_targets={cushions_between_targets}, rule={rule_case}")
             print(f"  Displacements: cue={cue_moved*100:.1f}cm, tgt1={tgt1_moved*100:.1f}cm, tgt2={tgt2_moved*100:.1f}cm")
+            success = valid_3cushion or valid_2cushion
             if valid_3cushion:
                 print(f"  [OK] Valid 3-cushion sequence!")
+            elif valid_2cushion:
+                print(f"  [OK] Valid 2-cushion sequence!")
             elif hit_t1 and hit_t2:
-                print(f"  [FAIL] Both hit but NOT valid 3-cushion")
+                print(f"  [FAIL] Both hit but NOT valid 2/3-cushion")
             actual_speed = getattr(self.env, '_last_actual_ball_speed', None)
             actual_angle = getattr(self.env, '_last_actual_ball_angle_deg', None)
             if actual_speed is not None:
@@ -561,7 +569,7 @@ class AutonomousStateMachine:
                     diff_text = f"{diff:.1f}deg"
                 print(f"  Actual initial cue ball: speed={actual_speed:.3f}m/s, "
                       f"angle={angle_text}, planned={self.last_planned_angle_deg}, diff={diff_text}")
-            return valid_3cushion
+            return success
         else:  # billiards
             self.env.wait_balls_stop(timeout=8.0)
             if self.env.is_ball_out_of_table(self.env.cue_ball_id):
