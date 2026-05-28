@@ -392,12 +392,16 @@ class MazeEnvironment:
 
         # ㄴ자 오프셋: EE 로컬 프레임 (Z=아래, X=타격방향)
         # 수직 부분 = EE +Z (아래로 60mm), 수평 부분 = EE +X (앞으로 30mm)
-        # 큐팁 실린더 축을 EE X축(타격방향)으로 회전 → 평평한 면이 공을 향함
-        tip_orn = p.getQuaternionFromEuler([0, np.pi/2, 0])
+        # TOOL_YAW_OFFSET: 실제 도구 장착 z축 회전 오프셋 → 위치만 반영
+        # 큐팁 자세는 항상 EE x축(타격방향) 수직 → 공을 정면으로 타격
+        yaw = TOOL_YAW_OFFSET
+        tool_x = TOOL_HORIZONTAL_EXT * np.cos(yaw)
+        tool_y = TOOL_HORIZONTAL_EXT * np.sin(yaw)
+        tip_orn = p.getQuaternionFromEuler([0, np.pi/2, 0])  # 팁 자세: 항상 strike_dir 수직
         cid = p.createConstraint(parentBodyUniqueId=robot_id, parentLinkIndex=ee_link_index,
                                  childBodyUniqueId=head_id, childLinkIndex=-1,
                                  jointType=p.JOINT_FIXED, jointAxis=[0, 0, 0],
-                                 parentFramePosition=[TOOL_HORIZONTAL_EXT, 0, TOOL_VERTICAL_DROP],
+                                 parentFramePosition=[tool_x, tool_y, TOOL_VERTICAL_DROP],
                                  parentFrameOrientation=tip_orn,
                                  childFramePosition=[0, 0, 0],
                                  physicsClientId=self.client)

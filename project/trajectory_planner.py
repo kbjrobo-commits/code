@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from src.utils import (
     xyzeul2SE3, Rot2Vec, Vec2Rot, eul2Rot, Rot2eul
 )
-from project.config import TOOL_VERTICAL_DROP, TOOL_HORIZONTAL_EXT, PIN_PB_EE_Z_OFFSET, TOOL_TIP_RADIUS
+from project.config import TOOL_VERTICAL_DROP, TOOL_HORIZONTAL_EXT, PIN_PB_EE_Z_OFFSET, TOOL_TIP_RADIUS, TOOL_YAW_OFFSET
 
 
 def _cubic_time_scaling(T_total, num_points):
@@ -176,7 +176,15 @@ class StrikeTrajectoryPlanner:
         # ㄴ자 도구 오프셋: 큐팁이 ball_pos에 도달하려면
         # EE는 공 뒤쪽(수평) + 공 위(수직)에 위치해야 함
         # PIN_PB_EE_Z_OFFSET: Pinocchio FK가 PyBullet EE보다 62mm 높으므로 보정
-        ee_offset = -strike_dir * TOOL_HORIZONTAL_EXT + np.array([0, 0, TOOL_VERTICAL_DROP + PIN_PB_EE_Z_OFFSET])
+        # TOOL_YAW_OFFSET: 실제 도구가 EE z축 기준으로 틀어진 각도 보정
+        #   yaw는 EE 로컬 프레임에서의 회전 → world frame으로 변환 필요
+        #   EE x축=strike_dir, EE y축=[dy,-dx,0] (수평 직교)
+        if abs(TOOL_YAW_OFFSET) > 1e-6:
+            ee_y = np.array([strike_dir[1], -strike_dir[0], 0.0])
+            tool_dir = strike_dir * np.cos(TOOL_YAW_OFFSET) + ee_y * np.sin(TOOL_YAW_OFFSET)
+            ee_offset = -tool_dir * TOOL_HORIZONTAL_EXT + np.array([0, 0, TOOL_VERTICAL_DROP + PIN_PB_EE_Z_OFFSET])
+        else:
+            ee_offset = -strike_dir * TOOL_HORIZONTAL_EXT + np.array([0, 0, TOOL_VERTICAL_DROP + PIN_PB_EE_Z_OFFSET])
 
         # 1. 준비 위치: 공 뒤쪽 approach_dist만큼 (+ ㄴ자 오프셋)
         ready_pos = ball_pos - strike_dir * approach_dist + ee_offset

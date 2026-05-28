@@ -94,6 +94,10 @@ TOOL_HEAD_MASS = 0.15           # 도구 물리 질량 (kg)
 HEADLESS_TOOL_MASS = 0.15       # Headless도 동일 질량 (물리 일관성)
 TOOL_HEAD_RESTITUTION = 0.9     # 반발 계수
 TOOL_CONSTRAINT_FORCE = 5000    # Constraint 최대 힘 (N)
+# 실제 도구 장착 z축 회전 오프셋 (rad)
+# 도구가 EE z축 기준으로 틀어진 각도. 위에서 봤을 때 반시계=양수.
+# 예: -15° → 도구 수평부가 EE x축에서 시계방향으로 15° 틀어짐
+TOOL_YAW_OFFSET = np.radians(-15.0)
 # Pinocchio FK vs PyBullet EE 프레임 Z 오프셋 보정
 # Pinocchio가 PyBullet보다 ~62mm 높은 EE 위치를 반환 (URDF 프레임 정의 차이)
 # IK 목표를 이만큼 높여서 PyBullet에서 올바른 위치에 도달하도록 보정

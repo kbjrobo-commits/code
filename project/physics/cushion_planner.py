@@ -58,8 +58,13 @@ class CushionShotPlanner:
             for r in candidates:
                 angle = r['angle']
                 strike_dir = np.array([np.cos(angle), np.sin(angle), 0.0])
-                # ㄴ자 도구: EE는 공 뒤쪽 + 위쪽에 위치
-                ee_offset = -strike_dir * TOOL_HORIZONTAL_EXT + np.array([0, 0, TOOL_VERTICAL_DROP])
+                # ㄴ자 도구: EE는 공 뒤쪽 + 위쪽에 위치 (TOOL_YAW_OFFSET: EE 로컬 프레임 회전)
+                if abs(TOOL_YAW_OFFSET) > 1e-6:
+                    ee_y = np.array([strike_dir[1], -strike_dir[0], 0.0])
+                    tool_dir = strike_dir * np.cos(TOOL_YAW_OFFSET) + ee_y * np.sin(TOOL_YAW_OFFSET)
+                    ee_offset = -tool_dir * TOOL_HORIZONTAL_EXT + np.array([0, 0, TOOL_VERTICAL_DROP])
+                else:
+                    ee_offset = -strike_dir * TOOL_HORIZONTAL_EXT + np.array([0, 0, TOOL_VERTICAL_DROP])
                 ready_pos = cue_3d + ee_offset - strike_dir * STRIKE_APPROACH_DIST
                 if np.linalg.norm(ready_pos[:2]) > SAFE_RADIUS:
                     continue
@@ -509,8 +514,13 @@ class CushionShotPlanner:
 
         # SE3 계산 — ㄴ자 도구: EE z축=아래, x축=strike방향
         ball_pos = np.array(cue_start)
-        # GUI trajectory_planner.py와 동일한 EE 오프셋
-        ee_offset = -strike_dir * TOOL_HORIZONTAL_EXT + np.array([0, 0, TOOL_VERTICAL_DROP + PIN_PB_EE_Z_OFFSET])
+        # GUI trajectory_planner.py와 동일한 EE 오프셋 (TOOL_YAW_OFFSET: EE 로컬 프레임 회전)
+        if abs(TOOL_YAW_OFFSET) > 1e-6:
+            ee_y = np.array([strike_dir[1], -strike_dir[0], 0.0])
+            tool_dir = strike_dir * np.cos(TOOL_YAW_OFFSET) + ee_y * np.sin(TOOL_YAW_OFFSET)
+            ee_offset = -tool_dir * TOOL_HORIZONTAL_EXT + np.array([0, 0, TOOL_VERTICAL_DROP + PIN_PB_EE_Z_OFFSET])
+        else:
+            ee_offset = -strike_dir * TOOL_HORIZONTAL_EXT + np.array([0, 0, TOOL_VERTICAL_DROP + PIN_PB_EE_Z_OFFSET])
         impact_ee = ball_pos + ee_offset
         ready_ee = impact_ee - strike_dir * STRIKE_APPROACH_DIST
         follow_ee = impact_ee + strike_dir * STRIKE_FOLLOW_DIST
