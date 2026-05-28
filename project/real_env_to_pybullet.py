@@ -560,7 +560,7 @@ def detect_balls() :
     thickness = 0.03
 
     center = np.array([CX, CY, H])
-    y_offset = float(- center[1] - W/2 - thickness)  # 기본 좌표 변환
+    y_offset = float(center[1])  # 기본 좌표 변환
 
     cue_pos = [float(white_ball[0]), float(white_ball[1]) + y_offset, float(ball_h)]
     target_pos = [float(yellow_ball[0]), float(yellow_ball[1]) + y_offset, float(ball_h)]
@@ -626,4 +626,4 @@ def wait_real_balls_stop(interval=0.5, threshold_mm=3.0, max_wait=10.0, verbose=
 
 if __name__ == "__main__":
     result = detect_balls()
-    print(result)
+    print(result)
