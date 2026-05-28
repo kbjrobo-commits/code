@@ -30,7 +30,10 @@ def load_physics_calibration():
     """물리 캘리브레이션 파라미터 로드. 없으면 None."""
     if os.path.exists(_PHYSICS_CALIB_FILE):
         calib = np.load(_PHYSICS_CALIB_FILE)
-        params = {k: float(calib[k]) for k in calib.files}
+        params = {}
+        for k in calib.files:
+            v = calib[k]
+            params[k] = float(v.item()) if hasattr(v, 'item') else float(v)
         print(f"  [CALIB] 물리 파라미터 적용: {params}")
         return params
     return None
@@ -557,17 +560,17 @@ def detect_balls() :
     thickness = 0.03
 
     center = np.array([CX, CY, H])
-    y_offset = - center[1] - W/2 - thickness  # 기본 좌표 변환
+    y_offset = float(- center[1] - W/2 - thickness)  # 기본 좌표 변환
 
-    cue_pos = [white_ball[0], white_ball[1] + y_offset, ball_h]
-    target_pos = [yellow_ball[0], yellow_ball[1] + y_offset, ball_h]
-    ball2_pos = [red_ball[0], red_ball[1] + y_offset, ball_h]
+    cue_pos = [float(white_ball[0]), float(white_ball[1]) + y_offset, float(ball_h)]
+    target_pos = [float(yellow_ball[0]), float(yellow_ball[1]) + y_offset, float(ball_h)]
+    ball2_pos = [float(red_ball[0]), float(red_ball[1]) + y_offset, float(ball_h)]
 
     # 캘리브레이션 오프셋 자동 적용
     pos_offset = load_position_offset()
     for pos in [cue_pos, target_pos, ball2_pos]:
-        pos[0] += pos_offset.get('x', 0.0)
-        pos[1] += pos_offset.get('y', 0.0)
+        pos[0] = float(pos[0] + pos_offset.get('x', 0.0))
+        pos[1] = float(pos[1] + pos_offset.get('y', 0.0))
 
     return cue_pos, target_pos, ball2_pos
 
