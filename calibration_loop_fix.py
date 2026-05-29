@@ -681,7 +681,10 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
     print(f"    delta:   [{delta_mm[0]:.1f}, {delta_mm[1]:.1f}, {delta_mm[2]:.1f}] mm")
     print(f"    p_follow: [{p_follow[0]:.1f}, {p_follow[1]:.1f}, {p_follow[2]:.1f}] mm")
     try:
+        # movej→movel 모드 전환 대기 (7TestCode 트러블슈팅 참고)
+        time.sleep(1.5)
         indy.movel([float(x) for x in p_follow], vel_ratio=100, acc_ratio=100)
+        time.sleep(0.3)  # 명령 시작 대기
         _wait_indy(indy, pb=pb)
     except Exception as e:
         print(f"    [ERROR] movel 실패: {e}, movej fallback")
