@@ -681,49 +681,27 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
     print(f"    delta:   [{delta_mm[0]:.1f}, {delta_mm[1]:.1f}, {delta_mm[2]:.1f}] mm")
     print(f"    p_follow: [{p_follow[0]:.1f}, {p_follow[1]:.1f}, {p_follow[2]:.1f}] mm")
 
-    movel_ok = False
-    try:
-        resp = indy.movel([float(x) for x in p_follow], vel_ratio=100, acc_ratio=100)
-        print(f"    movel response: {resp}")
-        if resp and resp.get('code') == '0':
-            # 모션 시작 대기 — is_in_motion이 True가 될 때까지
-            started = False
-            for _ in range(200):  # 최대 2초
-                md = indy.get_motion_data()
-                if md["is_in_motion"] or md.get("has_motion", False):
-                    started = True
-                    break
-                time.sleep(0.01)
-            if started:
-                print(f"    movel 시작 확인, 완료 대기...")
-                _wait_indy(indy, pb=pb)
-                movel_ok = True
-            else:
-                print(f"    movel 시작 안됨 (is_in_motion stayed False)")
-        else:
-            print(f"    movel rejected: {resp}")
-    except Exception as e:
-        print(f"    movel exception: {e}")
+    resp = indy.movel([float(x) for x in p_follow], vel_ratio=100, acc_ratio=100)
+    print(f"    movel response: {resp}")
+    # 폴링 금지 — movel은 70mm 이동이 0.2초 만에 끝나서
+    # pb.MoveRobot 시뮬 동기화 중에 놓침. 고정 대기 사용.
+    time.sleep(2.0)
 
-    if not movel_ok:
-        # Fallback: 로봇 내장 IK로 목표 joint angle → movej
-        print(f"    [FALLBACK] inverse_kin → movej")
-        try:
-            q_now_deg = indy.get_control_data()['q']
-            ik_result = indy.inverse_kin([float(x) for x in p_follow], q_now_deg)
-            print(f"    IK response: {ik_result.get('response', {})}")
-            if ik_result.get('response', {}).get('code') == '0':
-                q_target = ik_result['jpos']
-                indy.movej([float(x) for x in q_target], vel_ratio=100, acc_ratio=300)
-                _wait_indy(indy, pb=pb)
-            else:
-                print(f"    [FALLBACK2] sim IK movej")
-                indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=300)
-                _wait_indy(indy, pb=pb)
-        except Exception as e2:
-            print(f"    IK fallback failed: {e2}")
-            indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=300)
-            _wait_indy(indy, pb=pb)
+    # 위치 확인
+    p_after = indy.get_control_data()['p']
+    moved_mm = np.linalg.norm(np.array(p_after[:3]) - np.array(p_ready[:3]))
+    print(f"    이동 거리: {moved_mm:.1f} mm")
+    print(f"    p_after: [{p_after[0]:.1f}, {p_after[1]:.1f}, {p_after[2]:.1f}] mm")
+
+    if moved_mm < 5.0:
+        # movel 실패 — movej fallback
+        print(f"    [WARN] movel 미이동! movej fallback")
+        indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=300)
+        time.sleep(2.0)
+
+    # 시뮬 동기화
+    q_now = indy.get_control_data()['q']
+    pb.MoveRobot(q_now, degree=True)
     print(f"  [REAL] Strike 완료!")
 
     # ======== Phase 3: Home ========
