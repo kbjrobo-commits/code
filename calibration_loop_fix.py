@@ -680,16 +680,40 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
     print(f"    p_ready: [{p_ready[0]:.1f}, {p_ready[1]:.1f}, {p_ready[2]:.1f}] mm")
     print(f"    delta:   [{delta_mm[0]:.1f}, {delta_mm[1]:.1f}, {delta_mm[2]:.1f}] mm")
     print(f"    p_follow: [{p_follow[0]:.1f}, {p_follow[1]:.1f}, {p_follow[2]:.1f}] mm")
+
+    movel_ok = False
     try:
-        # movej→movel 모드 전환 대기 (7TestCode 트러블슈팅 참고)
-        time.sleep(1.5)
-        indy.movel([float(x) for x in p_follow], vel_ratio=100, acc_ratio=100)
-        time.sleep(0.3)  # 명령 시작 대기
-        _wait_indy(indy, pb=pb)
+        resp = indy.movel([float(x) for x in p_follow], vel_ratio=100, acc_ratio=100)
+        print(f"    movel response: {resp}")
+        if resp and resp.get('code') == '0':
+            time.sleep(0.1)
+            _wait_indy(indy, pb=pb)
+            movel_ok = True
+        else:
+            print(f"    movel rejected by controller")
     except Exception as e:
-        print(f"    [ERROR] movel 실패: {e}, movej fallback")
-        indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=300)
-        _wait_indy(indy, pb=pb)
+        print(f"    movel exception: {e}")
+
+    if not movel_ok:
+        # Fallback: 로봇 내장 IK로 목표 joint angle 계산 → movej
+        print(f"    [FALLBACK] inverse_kin → movej")
+        try:
+            q_now_deg = indy.get_control_data()['q']
+            ik_result = indy.inverse_kin([float(x) for x in p_follow], q_now_deg)
+            print(f"    IK response: {ik_result.get('response', {})}")
+            if ik_result.get('response', {}).get('code') == '0':
+                q_target = ik_result['jpos']
+                indy.movej([float(x) for x in q_target], vel_ratio=100, acc_ratio=300)
+                _wait_indy(indy, pb=pb)
+            else:
+                # 최후 수단: 시뮬 IK 결과로 movej
+                print(f"    [FALLBACK2] sim IK movej")
+                indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=300)
+                _wait_indy(indy, pb=pb)
+        except Exception as e2:
+            print(f"    IK fallback failed: {e2}")
+            indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=300)
+            _wait_indy(indy, pb=pb)
     print(f"  [REAL] Strike 완료!")
 
     # ======== Phase 3: Home ========
