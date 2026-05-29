@@ -629,7 +629,7 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
 
     Phase 1 (Approach):  waypoint별 MoveJ
     Phase 1.5 (Align):   Ready 위치 정밀 정렬 MoveJ
-    Phase 2 (Strike):    Follow-through MoveJ (vel=100, acc=300)
+    Phase 2 (Strike):    Follow-through MoveJ (vel=100, acc=900)
     Phase 3 (Retract):   Home MoveJ
     """
     approach_start = phases['approach'][0]
@@ -660,7 +660,7 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
 
     # ======== Phase 2: Strike (MoveJ) ========
     print(f"  [REAL] Phase 2: MoveJ Strike!")
-    indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=300)
+    indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=900)
     _wait_indy(indy, pb=pb)
     print(f"  [REAL] Strike 완료!")
 
