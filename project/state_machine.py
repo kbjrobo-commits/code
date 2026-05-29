@@ -393,6 +393,10 @@ class AutonomousStateMachine:
 
             if use_verify and not is_last:
                 state_id = _p.saveState(physicsClientId=self.env.client)
+                # 복원용 공 위치 저장
+                _saved_cue = list(_p.getBasePositionAndOrientation(self.env.cue_ball_id, physicsClientId=self.env.client)[0])
+                _saved_t1 = list(_p.getBasePositionAndOrientation(self.env.target_ball_id, physicsClientId=self.env.client)[0])
+                _saved_t2 = list(_p.getBasePositionAndOrientation(self.env.ball2_id, physicsClientId=self.env.client)[0]) if hasattr(self.env, 'ball2_id') else None
 
                 if hasattr(self.env, 'reset_contact_tracking'):
                     self.env.reset_contact_tracking()
@@ -405,29 +409,48 @@ class AutonomousStateMachine:
                     q_trajectory=ik_res['q_trajectory']
                 )
 
+                def _safe_restore():
+                    """restoreState 실패 시 수동 복원 fallback"""
+                    try:
+                        _p.restoreState(stateId=state_id, physicsClientId=self.env.client)
+                    except Exception:
+                        # 수동 복원: 공 위치 리셋 + 로봇 홈
+                        for bid, pos in [
+                            (self.env.cue_ball_id, _saved_cue),
+                            (self.env.target_ball_id, _saved_t1),
+                        ]:
+                            _p.resetBasePositionAndOrientation(bid, pos, [0,0,0,1], physicsClientId=self.env.client)
+                            _p.resetBaseVelocity(bid, [0,0,0], [0,0,0], physicsClientId=self.env.client)
+                        if _saved_t2 is not None and hasattr(self.env, 'ball2_id'):
+                            _p.resetBasePositionAndOrientation(self.env.ball2_id, _saved_t2, [0,0,0,1], physicsClientId=self.env.client)
+                            _p.resetBaseVelocity(self.env.ball2_id, [0,0,0], [0,0,0], physicsClientId=self.env.client)
+                    try:
+                        _p.removeState(state_id, physicsClientId=self.env.client)
+                    except Exception:
+                        pass
+
                 if exec_ok is False:
                     print(f"    [V#{vi+1}] Exec aborted")
-                    _p.restoreState(stateId=state_id, physicsClientId=self.env.client)
-                    _p.removeState(state_id, physicsClientId=self.env.client)
+                    _safe_restore()
                     continue
 
                 self.env.wait_balls_stop(timeout=8.0)
 
                 events = getattr(self.env, '_contact_events', [])
-                hit_t1 = getattr(self.env, '_contact_hit_t1', False)
-                hit_t2 = getattr(self.env, '_contact_hit_t2', False)
-                c_total = sum(1 for e in events if e == 'c')
-                valid_shot = hit_t1 and hit_t2 and c_total >= 2
+                from project.physics.cushion_rules import valid_cushion_sequence
+                valid_shot = valid_cushion_sequence(events, 2)
 
                 if valid_shot:
                     print(f"    [V#{vi+1}] OK angle={cand['angle_deg']:.1f} events={events}")
-                    _p.removeState(state_id, physicsClientId=self.env.client)
+                    try:
+                        _p.removeState(state_id, physicsClientId=self.env.client)
+                    except Exception:
+                        pass
                     verified_idx = vi
                     break
                 else:
                     print(f"    [V#{vi+1}] MISS angle={cand['angle_deg']:.1f} events={events}")
-                    _p.restoreState(stateId=state_id, physicsClientId=self.env.client)
-                    _p.removeState(state_id, physicsClientId=self.env.client)
+                    _safe_restore()
                     self.controller.move_home()
                     time.sleep(0.3)
             else:
@@ -552,23 +575,17 @@ class AutonomousStateMachine:
             cushions_between_targets = 0
             hit_t1 = getattr(self.env, '_contact_hit_t1', False)
             hit_t2 = getattr(self.env, '_contact_hit_t2', False)
+            from project.physics.cushion_rules import valid_cushion_sequence, cushion_count_before_second_target
             if events and hit_t1 and hit_t2:
-                t1_idx = events.index('t1') if 't1' in events else -1
-                t2_idx = events.index('t2') if 't2' in events else -1
-                if t1_idx >= 0 and t2_idx >= 0:
-                    second_idx = max(t1_idx, t2_idx)
-                    first_idx = min(t1_idx, t2_idx)
-                    c_total = sum(1 for e in events if e == 'c')  # 전체 쿠션 수
-                    cushions_before_first = events[:first_idx].count('c')
-                    cushions_between_targets = events[first_idx:second_idx].count('c')
-                    if c_total >= 3:
-                        valid_3cushion = True
-                        rule_case = 'valid-3cushion'
-                    elif c_total >= 2:
-                        valid_2cushion = True
-                        rule_case = 'valid-2cushion'
-                    else:
-                        rule_case = 'both-hit-not-enough-cushions'
+                c_before_2nd = cushion_count_before_second_target(events)
+                if c_before_2nd >= 3:
+                    valid_3cushion = True
+                    rule_case = 'valid-3cushion'
+                elif c_before_2nd >= 2:
+                    valid_2cushion = True
+                    rule_case = 'valid-2cushion'
+                else:
+                    rule_case = f'both-hit-only-{c_before_2nd}-cushions-before-2nd'
 
             print(f"  Cushion result: events={events}, cushions={cushion_count}")
             print(f"  Detail: hit_t1={hit_t1}, hit_t2={hit_t2}, "

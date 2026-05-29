@@ -378,10 +378,8 @@ for rnd in range(1, NUM_ROUNDS + 1):
                 # 공 정지 대기 + 결과 확인
                 env.wait_balls_stop(timeout=8.0)
                 events = getattr(env, '_contact_events', [])
-                hit_t1 = getattr(env, '_contact_hit_t1', False)
-                hit_t2 = getattr(env, '_contact_hit_t2', False)
-                c_total = sum(1 for e in events if e == 'c')
-                valid_shot = hit_t1 and hit_t2 and c_total >= 2
+                from project.physics.cushion_rules import valid_cushion_sequence
+                valid_shot = valid_cushion_sequence(events, 2)
 
                 if valid_shot:
                     print(f"    [V#{vi+1}] OK angle={cand['angle_deg']:.1f} events={events}")
@@ -467,10 +465,8 @@ for rnd in range(1, NUM_ROUNDS + 1):
             t2_pos = env.get_ball2_position()
             d2 = np.linalg.norm(cue_pos_f[:2] - t2_pos[:2])
         events = getattr(env, '_contact_events', [])
-        hit_t1 = getattr(env, '_contact_hit_t1', False)
-        hit_t2 = getattr(env, '_contact_hit_t2', False)
-        c_total = sum(1 for e in events if e == 'c')
-        valid_shot = hit_t1 and hit_t2 and c_total >= 2
+        from project.physics.cushion_rules import valid_cushion_sequence
+        valid_shot = valid_cushion_sequence(events, 2)
         print(f"  결과: d(tgt1)={d1:.3f}m, d(tgt2)={d2:.3f}m, "
               f"events={events}, valid={'YES' if valid_shot else 'NO'}")
     else:

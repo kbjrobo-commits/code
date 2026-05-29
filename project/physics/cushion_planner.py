@@ -839,16 +839,17 @@ class CushionShotPlanner:
         score = 0
         cue_final, _ = p.getBasePositionAndOrientation(cue_id, physicsClientId=sim_id)
 
-        # 순서 검증 (3쿠션 + 2쿠션)
+        # 순서 검증: 두 번째 목적구 접촉 이전의 쿠션 수로 판정
         valid_3cushion = False
         valid_2cushion = False
         if events and hit_t1 and hit_t2:
             t1_idx = events.index('t1')
             t2_idx = events.index('t2')
-            c_total = sum(1 for e in events if e == 'c')  # 전체 쿠션 수
-            if c_total >= 3:
+            second_idx = max(t1_idx, t2_idx)
+            c_before_2nd = events[:second_idx].count('c')
+            if c_before_2nd >= 3:
                 valid_3cushion = True
-            if c_total >= 2:
+            if c_before_2nd >= 2:
                 valid_2cushion = True
 
         if valid_3cushion:
