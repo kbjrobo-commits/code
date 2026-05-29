@@ -121,9 +121,15 @@ def run_position_calibration(indy, pb, env, ik):
         # detect_balls()가 캘리브레이션 오프셋을 자동 적용
         print(f"  큐볼 위치: [{cue_pos[0]:.4f}, {cue_pos[1]:.4f}, {cue_pos[2]:.4f}]")
 
-        # 시뮬에서 공 위치 업데이트
-        env.setup(cue_pos=cue_pos, target_pos=target_pos, ball2_pos=ball2_pos,
-                  num_obstacles=0)
+        # 시뮬에서 공 위치 업데이트 (reset_balls로 — setup 재호출 금지)
+        if env.cue_ball_id is None:
+            # 처음: skip_balls였으니 공 생성
+            env.setup(cue_pos=cue_pos, target_pos=target_pos, ball2_pos=ball2_pos,
+                      num_obstacles=0)
+            env.disable_robot_env_collision(pb.my_robot.robotId)
+            env.disable_tool_env_collision()
+        else:
+            env.reset_balls(cue_pos=cue_pos, target_pos=target_pos, ball2_pos=ball2_pos)
 
         # 2. 로봇을 공 위치로 천천히 접근 (타격 방향: +x, 매우 느린 속도)
         T_now = pb.my_robot.pinModel.FK(pb.my_robot.q)
@@ -255,11 +261,14 @@ def run_position_calibration(indy, pb, env, ik):
         # detect_balls()가 캘리브레이션 오프셋을 자동 적용
         print(f"  큐볼 위치: [{cue_pos[0]:.4f}, {cue_pos[1]:.4f}, {cue_pos[2]:.4f}]")
 
-        # 시뮬에서 공 위치 업데이트
-        env.setup(cue_pos=cue_pos, target_pos=target_pos, ball2_pos=ball2_pos,
-                  num_obstacles=0)
-
-        # 2. 로봇을 공 위치로 천천히 접근 (타격 방향: +x, 매우 느린 속도)
+        # 시뮬에서 공 위치 업데이트 (reset_balls로 — setup 재호출 금지)
+        if env.cue_ball_id is None:
+            env.setup(cue_pos=cue_pos, target_pos=target_pos, ball2_pos=ball2_pos,
+                      num_obstacles=0)
+            env.disable_robot_env_collision(pb.my_robot.robotId)
+            env.disable_tool_env_collision()
+        else:
+            env.reset_balls(cue_pos=cue_pos, target_pos=target_pos, ball2_pos=ball2_pos)
         T_now = pb.my_robot.pinModel.FK(pb.my_robot.q)
         q_now = pb.my_robot.q.copy()
 
@@ -480,9 +489,14 @@ def run_physics_calibration(indy, pb, env, ik, num_trials=5):
 
         print(f"  cue={cue_start[:2]}, t1={tgt1_start[:2]}, t2={tgt2_start[:2]}")
 
-        # 시뮬 환경 설정
-        env.setup(cue_pos=cue_start, target_pos=tgt1_start,
-                  ball2_pos=tgt2_start, num_obstacles=0)
+        # 시뮬 환경 설정 (reset_balls로 — setup 재호출 금지)
+        if env.cue_ball_id is None:
+            env.setup(cue_pos=cue_start, target_pos=tgt1_start,
+                      ball2_pos=tgt2_start, num_obstacles=0)
+            env.disable_robot_env_collision(pb.my_robot.robotId)
+            env.disable_tool_env_collision()
+        else:
+            env.reset_balls(cue_pos=cue_start, target_pos=tgt1_start, ball2_pos=tgt2_start)
 
         # 2. 플래너로 타격 계획 (자동 — 각도/속도 자동 결정)
         print("  [THINK] 타격 계획 중...")
@@ -663,9 +677,16 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
     # 자세(rx, ry, rz)는 그대로 유지
 
     print(f"  [REAL] Phase 2: MoveL Strike!")
-    print(f"    delta: [{delta_mm[0]:.1f}, {delta_mm[1]:.1f}, {delta_mm[2]:.1f}] mm")
-    indy.movel(p_follow, vel_ratio=100, acc_ratio=300)
-    _wait_indy(indy, pb=pb)
+    print(f"    p_ready: [{p_ready[0]:.1f}, {p_ready[1]:.1f}, {p_ready[2]:.1f}] mm")
+    print(f"    delta:   [{delta_mm[0]:.1f}, {delta_mm[1]:.1f}, {delta_mm[2]:.1f}] mm")
+    print(f"    p_follow: [{p_follow[0]:.1f}, {p_follow[1]:.1f}, {p_follow[2]:.1f}] mm")
+    try:
+        indy.movel([float(x) for x in p_follow], vel_ratio=100, acc_ratio=100)
+        _wait_indy(indy, pb=pb)
+    except Exception as e:
+        print(f"    [ERROR] movel 실패: {e}, movej fallback")
+        indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=300)
+        _wait_indy(indy, pb=pb)
     print(f"  [REAL] Strike 완료!")
 
     # ======== Phase 3: Home ========
