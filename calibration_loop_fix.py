@@ -409,39 +409,13 @@ def _replay_approach_only(indy, pb, q_traj_deg):
 
 
 def _wait_indy(indy, timeout=30, pb=None):
-    """실제 로봇 동작 완료 대기 + 시뮬 동기화.
-    
-    1) 모션 시작 대기: is_in_motion=True 또는 is_target_reached=False
-    2) 모션 완료 대기: is_in_motion=False AND is_target_reached=True
-    """
+    """실제 로봇 동작 완료 대기 + 시뮬 동기화 (7TestCode와 동일)."""
     t0 = time.time()
-
-    # 1) 모션 시작 대기 (최대 1초)
-    #    이전 모션의 is_target_reached=True가 남아있을 수 있으므로
-    #    is_in_motion=True 또는 is_target_reached=False가 될 때까지 대기
-    motion_seen = False
-    for _ in range(100):
-        md = indy.get_motion_data()
-        if md["is_in_motion"]:
-            motion_seen = True
-            break
-        if not md.get("is_target_reached", True):
-            # target_reached가 False가 됐으면 모션 시작됨
-            motion_seen = True
-            break
-        time.sleep(0.01)
-    
-    if not motion_seen:
-        # 1초 내에 모션이 안 시작됨 — 이미 완료됐거나 명령 무시됨
-        return
-    
-    # 2) 모션 완료 대기
     while time.time() - t0 < timeout:
         if pb is not None:
             q = indy.get_control_data()['q']
             pb.MoveRobot(q, degree=True)
-        md = indy.get_motion_data()
-        if not md["is_in_motion"]:
+        if not indy.get_motion_data()["is_in_motion"]:
             break
         time.sleep(0.01)
 
@@ -684,44 +658,10 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
     _wait_indy(indy, pb=pb)
     time.sleep(0.5)
 
-    # ======== Phase 2: Strike (MoveL 직선 타격) ========
-    # movej는 곡선이 되므로, 타격만 movel로 직선 보장
-    # FK 변환 없이: 실제 로봇 현재 위치 + 시뮬 delta로 계산
-    p_ready = indy.get_control_data()['p']  # [x_mm, y_mm, z_mm, rx, ry, rz]
-
-    # 시뮬에서 ready→follow 간 Cartesian 변위 계산
-    T_ready_sim = pb.my_robot.pinModel.FK(np.radians(q_ready))
-    T_follow_sim = pb.my_robot.pinModel.FK(np.radians(q_follow_deg))
-    delta_mm = (T_follow_sim[:3, 3] - T_ready_sim[:3, 3]) * 1000.0  # m → mm
-
-    # 실제 로봇 좌표계에서 follow 위치 = 현재 위치 + delta (자세는 유지)
-    p_follow = list(p_ready)
-    p_follow[0] += delta_mm[0]
-    p_follow[1] += delta_mm[1]
-    p_follow[2] += delta_mm[2]
-    # 자세(rx, ry, rz)는 그대로 유지
-
-    print(f"  [REAL] Phase 2: MoveL Strike!")
-    print(f"    p_ready: [{p_ready[0]:.1f}, {p_ready[1]:.1f}, {p_ready[2]:.1f}] mm")
-    print(f"    delta:   [{delta_mm[0]:.1f}, {delta_mm[1]:.1f}, {delta_mm[2]:.1f}] mm")
-    print(f"    p_follow: [{p_follow[0]:.1f}, {p_follow[1]:.1f}, {p_follow[2]:.1f}] mm")
-
-    resp = indy.movel([float(x) for x in p_follow], vel_ratio=100, acc_ratio=100)
-    print(f"    movel response: {resp}")
+    # ======== Phase 2: Strike (MoveJ) ========
+    print(f"  [REAL] Phase 2: MoveJ Strike!")
+    indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=300)
     _wait_indy(indy, pb=pb)
-
-    # 위치 확인
-    p_after = indy.get_control_data()['p']
-    moved_mm = np.linalg.norm(np.array(p_after[:3]) - np.array(p_ready[:3]))
-    print(f"    이동 거리: {moved_mm:.1f} mm")
-    print(f"    p_after: [{p_after[0]:.1f}, {p_after[1]:.1f}, {p_after[2]:.1f}] mm")
-
-    if moved_mm < 5.0:
-        # movel 실패 — movej fallback
-        print(f"    [WARN] movel 미이동! movej fallback")
-        indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=300)
-        _wait_indy(indy, pb=pb)
-
     print(f"  [REAL] Strike 완료!")
 
     # ======== Phase 3: Home ========
