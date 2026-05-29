@@ -38,11 +38,11 @@ def load_physics_calibration():
         return params
     return None
 
-TABLE_WIDTH_MM = int((MAZE_TABLE_LENGTH + 0.06) * 1000)
-TABLE_HEIGHT_MM = int((MAZE_TABLE_WIDTH + 0.06) * 1000)
+TABLE_WIDTH_MM = int((MAZE_TABLE_WIDTH + 0.06) * 1000)
+TABLE_HEIGHT_MM = int((MAZE_TABLE_LENGTH + 0.06) * 1000)
 
-DISPLAY_WIDTH = int((MAZE_TABLE_LENGTH + 0.06) * 1000)
-DISPLAY_HEIGHT = int((MAZE_TABLE_WIDTH + 0.06) * 1000)
+DISPLAY_WIDTH = int((MAZE_TABLE_WIDTH + 0.06) * 1000)
+DISPLAY_HEIGHT = int((MAZE_TABLE_LENGTH + 0.06) * 1000)
 
 aruco_size = 30
 
