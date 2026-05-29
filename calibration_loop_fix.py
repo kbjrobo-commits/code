@@ -686,16 +686,27 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
         resp = indy.movel([float(x) for x in p_follow], vel_ratio=100, acc_ratio=100)
         print(f"    movel response: {resp}")
         if resp and resp.get('code') == '0':
-            time.sleep(0.1)
-            _wait_indy(indy, pb=pb)
-            movel_ok = True
+            # 모션 시작 대기 — is_in_motion이 True가 될 때까지
+            started = False
+            for _ in range(200):  # 최대 2초
+                md = indy.get_motion_data()
+                if md["is_in_motion"] or md.get("has_motion", False):
+                    started = True
+                    break
+                time.sleep(0.01)
+            if started:
+                print(f"    movel 시작 확인, 완료 대기...")
+                _wait_indy(indy, pb=pb)
+                movel_ok = True
+            else:
+                print(f"    movel 시작 안됨 (is_in_motion stayed False)")
         else:
-            print(f"    movel rejected by controller")
+            print(f"    movel rejected: {resp}")
     except Exception as e:
         print(f"    movel exception: {e}")
 
     if not movel_ok:
-        # Fallback: 로봇 내장 IK로 목표 joint angle 계산 → movej
+        # Fallback: 로봇 내장 IK로 목표 joint angle → movej
         print(f"    [FALLBACK] inverse_kin → movej")
         try:
             q_now_deg = indy.get_control_data()['q']
@@ -706,7 +717,6 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
                 indy.movej([float(x) for x in q_target], vel_ratio=100, acc_ratio=300)
                 _wait_indy(indy, pb=pb)
             else:
-                # 최후 수단: 시뮬 IK 결과로 movej
                 print(f"    [FALLBACK2] sim IK movej")
                 indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=300)
                 _wait_indy(indy, pb=pb)
