@@ -25,19 +25,21 @@ class MazeEnvironment:
         self.cue_ball_id = None
         self.target_ball_id = None
         self.obstacle_ids = []
-        self.obstacle_positions = []  # [(x, y, radius), ...]
+        self.obstacle_positions = []
         self.tool_id = None
 
     def setup(self, cue_pos=None, target_pos=None, ball2_pos=None,
-              num_obstacles=5, seed=None, obstacle_positions=None):
-        """?섍꼍 珥덇린??
+              num_obstacles=5, seed=None, obstacle_positions=None,
+              skip_balls=False):
+        """환경 초기화
 
         Args:
-            cue_pos: ?먮낵 ?꾩튂 [x, y, z]
-            target_pos: 紐⑺몴怨??꾩튂 [x, y, z]
-            num_obstacles: 臾댁옉???μ븷臾?媛쒖닔
-            seed: ?쒕뜡 ?쒕뱶
-            obstacle_positions: ?섎룞 ?μ븷臾?醫뚰몴 [(x,y), ...] ??鍮꾩쟾 ?ㅼ틪 寃곌낵 ?낅젰??
+            cue_pos: 큐볼 위치 [x, y, z]
+            target_pos: 목표구 위치 [x, y, z]
+            num_obstacles: 장애물 개수
+            seed: 랜덤 시드
+            obstacle_positions: 수동 장애물 좌표 [(x,y), ...]
+            skip_balls: True면 공 생성 생략 (캘리브레이션용)
         """
         L = MAZE_TABLE_LENGTH
         W = MAZE_TABLE_WIDTH
@@ -52,13 +54,12 @@ class MazeEnvironment:
             'x_min': CX - L / 2, 'x_max': CX + L / 2,
             'y_min': CY - W / 2, 'y_max': CY + W / 2
         }
-        self._surface_z = H + TH / 2  # ?뚯씠釉??쒕㈃ z 醫뚰몴
+        self._surface_z = H + TH / 2
 
         if cue_pos is None:
             cue_pos = [CX, CY - W / 4, ball_h]
         if target_pos is None:
             target_pos = [CX, CY + W / 8, ball_h]
-        # 3踰덉㎏ 怨?(?곕━荑좎뀡: 諛? ?? ??
         if ball2_pos is None:
             ball2_pos = [CX + L / 6, CY, ball_h]
 
@@ -68,21 +69,25 @@ class MazeEnvironment:
 
         self._create_table()
         self._create_cushions()
-        self._create_cue_ball(cue_pos)
-        self._create_target_ball(target_pos)
-        self._create_ball2(ball2_pos)
+
+        if not skip_balls:
+            self._create_cue_ball(cue_pos)
+            self._create_target_ball(target_pos)
+            self._create_ball2(ball2_pos)
 
         if obstacle_positions is not None:
             self._place_obstacles_manual(obstacle_positions)
-        else:
+        elif not skip_balls:
             self._place_obstacles_random(num_obstacles, seed)
 
-        print(f"[Maze] Environment setup complete (2-cushion)")
+        mode = "table-only" if skip_balls else "2-cushion"
+        print(f"[Maze] Environment setup complete ({mode})")
         print(f"  Table: {L}m x {W}m, center Y={CY}")
-        print(f"  Cue (white): {cue_pos}")
-        print(f"  Target1 (yellow): {target_pos}")
-        print(f"  Target2 (red): {ball2_pos}")
-        print(f"  Obstacles: {len(self.obstacle_positions)}")
+        if not skip_balls:
+            print(f"  Cue (white): {cue_pos}")
+            print(f"  Target1 (yellow): {target_pos}")
+            print(f"  Target2 (red): {ball2_pos}")
+            print(f"  Obstacles: {len(self.obstacle_positions)}")
 
     # ??? ?뚯씠釉?& 荑좎뀡 ?????????????????????????????????
 
@@ -418,7 +423,8 @@ class MazeEnvironment:
         """
         num_joints = p.getNumJoints(robot_id, physicsClientId=self.client)
         env_bodies = ([self.table_id] + self.cushion_ids + self.obstacle_ids
-                      + [self.cue_ball_id, self.target_ball_id, self.ball2_id])
+                      + [self.cue_ball_id, self.target_ball_id,
+                         getattr(self, 'ball2_id', None)])
         for env_body in env_bodies:
             if env_body is None:
                 continue
@@ -432,7 +438,7 @@ class MazeEnvironment:
             return
         # ?뚯씠釉?荑좎뀡/?μ븷臾?紐⑺몴怨듦낵 異⑸룎 鍮꾪솢?깊솕
         no_collide = ([self.table_id] + self.cushion_ids + self.obstacle_ids
-                      + [self.target_ball_id, self.ball2_id])
+                      + [self.target_ball_id, getattr(self, 'ball2_id', None)])
         for env_body in no_collide:
             if env_body is None:
                 continue

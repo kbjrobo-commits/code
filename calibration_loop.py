@@ -651,7 +651,7 @@ if __name__ == '__main__':
     robot_id = pb.my_robot.robotId
     ee_link = pb.my_robot.RobotEEJointIdx[-1]
     env = MazeEnvironment(pb.ClientId)
-    env.setup(num_obstacles=0)
+    env.setup(num_obstacles=0, skip_balls=True)
     env.disable_robot_env_collision(robot_id)
     env.attach_compact_tool(robot_id, ee_link)
     env.disable_tool_env_collision()
