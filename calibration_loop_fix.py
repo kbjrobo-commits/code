@@ -383,24 +383,19 @@ def run_position_calibration(indy, pb, env, ik):
 
 def _replay_approach_only(indy, pb, q_traj_deg):
     """접근 궤적만 실제 로봇에서 재생 (느리게, 안전하게)."""
-    from src.utils import Rot2eul
     # movej로 시작점 이동
     indy.movej(list(q_traj_deg[0]))
     _wait_indy(indy)
     time.sleep(0.5)
 
-    # 접근 궤적 재생 (movel, 느린 속도)
+    # 접근 궤적 재생 (movej, 느린 속도)
     step = max(1, len(q_traj_deg) // 20)  # 20개 포인트로 축소
     for i in range(0, len(q_traj_deg), step):
-        T = pb.my_robot.pinModel.FK(np.radians(q_traj_deg[i]))
-        p6 = np.zeros(6)
-        p6[0:3] = 1000 * T[0:3, 3]
-        p6[3:6] = Rot2eul(T[0:3, 0:3], seq='XYZ', degree=True)
         try:
-            indy.movel(list(p6), vel_ratio=20, acc_ratio=50)
+            indy.movej(list(q_traj_deg[i]), vel_ratio=20, acc_ratio=50)
             _wait_indy(indy, timeout=10)
         except Exception as e:
-            print(f"    movel 오류: {e}")
+            print(f"    movej 오류: {e}")
             break
 
 
@@ -612,43 +607,29 @@ def run_physics_calibration(indy, pb, env, ik, num_trials=5):
 
 
 def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
-    """실제 로봇에서 접근→타격 재생 (7TestCode 흐름 기반)."""
-    from src.utils import Rot2eul
+    """실제 로봇에서 접근→타격 재생 (movej 기반)."""
 
     # Approach: movej로 ready 위치까지
     ready_idx = phases['approach'][1] - 1
     q_ready_deg = q_traj_deg[ready_idx]
 
     # 중간 경유점으로 안전 접근
-    # 먼저 상공 위치로 이동
     mid_idx = max(0, ready_idx - 200)
     indy.movej(list(q_traj_deg[mid_idx]))
     _wait_indy(indy)
 
-    # ready 위치로 movel 접근
-    T_ready = pb.my_robot.pinModel.FK(np.radians(q_ready_deg))
-    p6_ready = np.zeros(6)
-    p6_ready[0:3] = 1000 * T_ready[0:3, 3]
-    p6_ready[3:6] = Rot2eul(T_ready[0:3, 0:3], seq='XYZ', degree=True)
-    indy.movel(list(p6_ready), vel_ratio=30, acc_ratio=60)
+    # ready 위치로 movej 접근
+    indy.movej(list(q_ready_deg), vel_ratio=30, acc_ratio=60)
     _wait_indy(indy)
     time.sleep(0.3)
 
-    # Strike: movel로 follow 위치까지 (빠르게)
-    T_follow = pb.my_robot.pinModel.FK(np.radians(q_follow_deg))
-    p6_follow = np.zeros(6)
-    p6_follow[0:3] = 1000 * T_follow[0:3, 3]
-    p6_follow[3:6] = Rot2eul(T_follow[0:3, 0:3], seq='XYZ', degree=True)
-
-    dist_mm = np.linalg.norm(p6_follow[:3] - p6_ready[:3])
+    # Strike: movej로 follow 위치까지 (빠르게)
     vel_ratio = min(100, max(50, int(speed * 100)))
-    indy.movel(list(p6_follow), vel_ratio=vel_ratio, acc_ratio=100)
+    indy.movej(list(q_follow_deg), vel_ratio=vel_ratio, acc_ratio=100)
     _wait_indy(indy, timeout=5)
 
-    # Retract: 수직 상승
-    p6_retract = p6_follow.copy()
-    p6_retract[2] += RETRACT_HEIGHT * 1000
-    indy.movel(list(p6_retract), vel_ratio=30, acc_ratio=60)
+    # Retract: 홈으로 복귀
+    indy.movej(list(HOME_Q_DEG), vel_ratio=30, acc_ratio=60)
     _wait_indy(indy)
 
 
