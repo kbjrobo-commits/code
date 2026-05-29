@@ -524,6 +524,7 @@ def detect_balls() :
         ):
             print("All balls detected")
             cv2.waitKey(0)
+            pipeline.stop()
             cv2.destroyAllWindows()
             break
 
@@ -561,11 +562,11 @@ def detect_balls() :
 
     center = np.array([CX, CY, H])
     x_offset = 0.3 + L + 2 * thickness
-    y_offset = float(center[1])  # 기본 좌표 변환
+    y_offset = (W + 2 * thickness) / 2 - float(center[1])  # 기본 좌표 변환
 
-    cue_pos = [x_offset - float(white_ball[1]), float(white_ball[0]), float(ball_h)]
-    target_pos = [x_offset - float(yellow_ball[1]), float(yellow_ball[0]), float(ball_h)]
-    ball2_pos = [x_offset - float(red_ball[1]), float(red_ball[0]), float(ball_h)]
+    cue_pos = [x_offset - float(white_ball[1]), float(white_ball[0]) - y_offset, float(ball_h)]
+    target_pos = [x_offset - float(yellow_ball[1]), float(yellow_ball[0]) - y_offset, float(ball_h)]
+    ball2_pos = [x_offset - float(red_ball[1]), float(red_ball[0]) - y_offset, float(ball_h)]
 
     # 캘리브레이션 오프셋 자동 적용
     pos_offset = load_position_offset()
