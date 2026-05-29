@@ -607,29 +607,48 @@ def run_physics_calibration(indy, pb, env, ik, num_trials=5):
 
 
 def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
-    """실제 로봇에서 접근→타격 재생 (movej 기반)."""
+    """실제 로봇에서 접근→타격 재생 (7TestCode replay_trajectory_on_real과 동일).
 
-    # Approach: movej로 ready 위치까지
-    ready_idx = phases['approach'][1] - 1
-    q_ready_deg = q_traj_deg[ready_idx]
+    Phase 1 (Approach):  waypoint별 MoveJ
+    Phase 1.5 (Align):   Ready 위치 정밀 정렬 MoveJ
+    Phase 2 (Strike):    Follow-through MoveJ (vel=100, acc=300)
+    Phase 3 (Retract):   Home MoveJ
+    """
+    approach_start = phases['approach'][0]
+    approach_end = phases['approach'][1]
 
-    # 중간 경유점으로 안전 접근
-    mid_idx = max(0, ready_idx - 200)
-    indy.movej(list(q_traj_deg[mid_idx]))
+    # ======== Phase 1: Approach (MoveJ) ========
+    APPROACH_STEP = 100
+    APPROACH_VEL = 20
+    APPROACH_ACC = 50
+
+    waypoint_indices = list(range(approach_start, approach_end, APPROACH_STEP))
+    if waypoint_indices[-1] != approach_end - 1:
+        waypoint_indices.append(approach_end - 1)
+
+    print(f"  [REAL] Phase 1: MoveJ Approach ({len(waypoint_indices)} waypoints)...")
+    for wi, idx in enumerate(waypoint_indices):
+        indy.movej([float(x) for x in q_traj_deg[idx]], vel_ratio=APPROACH_VEL, acc_ratio=APPROACH_ACC)
+        _wait_indy(indy)
+    print(f"  [REAL] Approach 완료")
+
+    # ======== Phase 1.5: Align ========
+    q_ready = q_traj_deg[approach_end - 1]
+    print(f"  [REAL] Phase 1.5: Align")
+    time.sleep(0.5)
+    indy.movej([float(x) for x in q_ready], vel_ratio=10, acc_ratio=30)
     _wait_indy(indy)
+    time.sleep(0.5)
 
-    # ready 위치로 movej 접근
-    indy.movej(list(q_ready_deg), vel_ratio=30, acc_ratio=60)
+    # ======== Phase 2: Strike (MoveJ to follow-through) ========
+    print(f"  [REAL] Phase 2: MoveJ Strike!")
+    indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=300)
     _wait_indy(indy)
-    time.sleep(0.3)
+    print(f"  [REAL] Strike 완료!")
 
-    # Strike: movej로 follow 위치까지 (빠르게)
-    vel_ratio = min(100, max(50, int(speed * 100)))
-    indy.movej(list(q_follow_deg), vel_ratio=vel_ratio, acc_ratio=100)
-    _wait_indy(indy, timeout=5)
-
-    # Retract: 홈으로 복귀
-    indy.movej(list(HOME_Q_DEG), vel_ratio=30, acc_ratio=60)
+    # ======== Phase 3: Home ========
+    print(f"  [REAL] Phase 3: Home")
+    indy.movej(list(HOME_Q_DEG), vel_ratio=30, acc_ratio=100)
     _wait_indy(indy)
 
 
