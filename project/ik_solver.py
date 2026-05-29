@@ -166,7 +166,8 @@ class IKSolver:
         return q_trajectory
 
     def solve_trajectory_validated(self, q_init, trajectory_SE3,
-                                    w_threshold=0.005, dq_max=0.3):
+                                    w_threshold=0.002, dq_max=0.3,
+                                    validate_from=0):
         """궤적 전체 IK 사전풀이 + 검증
 
         실행 전에 전체 궤적을 풀어서 관절한계/특이점/급격한 점프를 확인.
@@ -177,6 +178,7 @@ class IKSolver:
             trajectory_SE3: SE3 리스트
             w_threshold: manipulability 경고 임계치
             dq_max: 연속 점 간 최대 허용 관절 변화 (rad)
+            validate_from: 이 인덱스부터 검증 시작 (이전은 IK만 풀이)
 
         Returns:
             result: dict {
@@ -201,31 +203,34 @@ class IKSolver:
                 q_i = self.solve_step(q_i, T_goal)
             q_trajectory.append(q_i.copy())
 
-            # 1. Manipulability 검사
+            # validate_from 이전은 IK만 풀고 검증 건너뜀 (고공 접근구간 등)
+            if idx < validate_from:
+                q_prev = q_i.copy()
+                continue
+
+            # 1. Manipulability 추적 (soft warning — 순위 정렬에만 사용, blocking 아님)
             w = self.manipulability(q_i)
             manipulability_list.append(w)
-            effective_w_thresh = max(w_threshold, 0.015)
-            if w < effective_w_thresh:
-                issues.append(
-                    f"[pt {idx}] 특이점 근접: manipulability={w:.6f} < {effective_w_thresh}")
 
-            # 2. 관절 한계 검사
+            # 2. 관절 한계 검사 (blocking)
             valid, viols = self.check_joint_limits(q_i)
             if not valid:
                 joint_violations.append((idx, viols))
                 issues.append(
                     f"[pt {idx}] 관절 한계 초과: joints {viols}")
 
-            # 3. 바디 뚫림 검사
+            # 3. 바디 뚫림 검사 (blocking, 테이블 높이 기반 동적 임계치)
+            from project.config import MAZE_TABLE_SURFACE_HEIGHT, MAZE_TABLE_HEIGHT
+            body_z_min = MAZE_TABLE_SURFACE_HEIGHT + MAZE_TABLE_HEIGHT / 2 + 0.03  # 테이블 표면 + 3cm 마진
             import pinocchio as pin
             pin.forwardKinematics(self.pin.pinModel, self.pin.pinData, q_i)
             for j_id in range(3, self.pin.pinModel.njoints):
                 pos = self.pin.pinData.oMi[j_id].translation
-                if pos[1] > 0.05 and pos[2] < 0.30:
-                    issues.append(f"[pt {idx}] 바디 뚫림: joint {j_id} at z={pos[2]:.3f} < 0.30m")
+                if pos[1] > 0.05 and pos[2] < body_z_min:
+                    issues.append(f"[pt {idx}] 바디 뚫림: joint {j_id} at z={pos[2]:.3f} < {body_z_min:.3f}m")
                     break
 
-            # 4. 급격한 관절 점프 검사
+            # 4. 급격한 관절 점프 검사 (blocking)
             dq = np.max(np.abs(q_i - q_prev))
             if dq > dq_max:
                 issues.append(

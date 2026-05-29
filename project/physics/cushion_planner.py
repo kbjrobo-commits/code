@@ -39,19 +39,49 @@ class CushionShotPlanner:
         tilt_rad = np.radians(MAZE_STRIKE_ANGLE_DEG)
 
         def _angle_priority(angle_rad):
-            """실측 기반 각도 안전도: 50-180° 최우선, 0-30°/330-360° 위험"""
-            deg = np.degrees(angle_rad) % 360
-            if 50 <= deg <= 180:
-                return 0  # 안전 (글랜싱 블로우 없음)
-            elif 30 <= deg < 50 or 180 < deg <= 330:
+            """Ready position 거리 기반 동적 안전도 (로봇에 가까울수록 안전)"""
+            strike_dir = np.array([np.cos(angle_rad), np.sin(angle_rad), 0.0])
+            if abs(TOOL_YAW_OFFSET) > 1e-6:
+                ee_y = np.array([strike_dir[1], -strike_dir[0], 0.0])
+                tool_dir = strike_dir * np.cos(TOOL_YAW_OFFSET) + ee_y * np.sin(TOOL_YAW_OFFSET)
+                ee_off = -tool_dir * TOOL_HORIZONTAL_EXT + np.array([0, 0, TOOL_VERTICAL_DROP])
+            else:
+                ee_off = -strike_dir * TOOL_HORIZONTAL_EXT + np.array([0, 0, TOOL_VERTICAL_DROP])
+            ready = cue_3d + ee_off - strike_dir * STRIKE_APPROACH_DIST
+            r = np.linalg.norm(ready[:2])
+            if r <= 0.45:
+                return 0  # 가까움 → manipulability 최고
+            elif r <= 0.55:
                 return 1  # 보통
             else:
-                return 2  # 위험 (글랜싱 블로우 빈발)
+                return 2  # 멀어서 위험
 
-        def _filter_reachable_diverse(candidates, max_n=15):
-            """도달가능 + 각도 다양성 필터 (안전 각도 + 적은 쿠션 + 벽 뚫림 방지)"""
-            # 안전 각도 우선, 같은 안전도면 쿠션 적은 것 우선 (예측 정확도 ↑)
-            candidates = sorted(candidates, key=lambda r: (_angle_priority(r['angle']), r.get('cushion_count', 99)))
+        def _ready_distance(angle_rad):
+            """Ready position까지 로봇 베이스 거리 (정렬 보조키)"""
+            strike_dir = np.array([np.cos(angle_rad), np.sin(angle_rad), 0.0])
+            if abs(TOOL_YAW_OFFSET) > 1e-6:
+                ee_y = np.array([strike_dir[1], -strike_dir[0], 0.0])
+                tool_dir = strike_dir * np.cos(TOOL_YAW_OFFSET) + ee_y * np.sin(TOOL_YAW_OFFSET)
+                ee_off = -tool_dir * TOOL_HORIZONTAL_EXT + np.array([0, 0, TOOL_VERTICAL_DROP])
+            else:
+                ee_off = -strike_dir * TOOL_HORIZONTAL_EXT + np.array([0, 0, TOOL_VERTICAL_DROP])
+            ready = cue_3d + ee_off - strike_dir * STRIKE_APPROACH_DIST
+            return np.linalg.norm(ready[:2])
+
+        def _filter_reachable_diverse(candidates, max_n=15, diversity_deg=3):
+            """도달가능 + 각도 다양성 필터 (로봇 근접도 + 적은 쿠션 + 벽 뚫림 방지)"""
+            # 로봇에 가까운 각도 우선, robust(score높은) 우선, 쿠션 마진순, 거리순
+            def _cushion_margin(count):
+                """쿠션 마진: 3=최적(마진1), 2=위험(마진0), 4+=불확실"""
+                if count == 3: return 0
+                if count == 2: return 1
+                return 2  # 4+는 불확실
+            candidates = sorted(candidates, key=lambda r: (
+                _angle_priority(r['angle']),
+                -r.get('score', 0),
+                _cushion_margin(r.get('cushion_count', 99)),
+                _ready_distance(r['angle'])
+            ))
             bounds = self.bounds
             tip_margin = TOOL_TIP_RADIUS  # 큐팁 반경만 (벽 내면에 닿지 않도록)
             result = []
@@ -69,6 +99,34 @@ class CushionShotPlanner:
                 if np.linalg.norm(ready_pos[:2]) > SAFE_RADIUS:
                     continue
 
+                # 벽 근접 타격 방지: 공이 타격 방향 벽에 가까우면
+                # 도구-벽-공 샌드위치로 예측 불가 → 해당 방향 제외
+                wall_margin = 0.03  # 3cm 기본 마진
+                sd2 = strike_dir[:2]
+                cue2 = cue_3d[:2]
+                dir_thresh = 0.1  # 방향 임계치 (0.1 = ~5.7° 이상 벽 쪽이면 필터)
+                wall_too_close = False
+                # 각 벽 거리 계산
+                dx_max = bounds['x_max'] - cue2[0]
+                dx_min = cue2[0] - bounds['x_min']
+                dy_max = bounds['y_max'] - cue2[1]
+                dy_min = cue2[1] - bounds['y_min']
+                # 벽에 매우 가까우면(15mm) 마진 확대
+                eff_margin_xmax = 0.05 if dx_max < 0.015 else wall_margin
+                eff_margin_xmin = 0.05 if dx_min < 0.015 else wall_margin
+                eff_margin_ymax = 0.05 if dy_max < 0.015 else wall_margin
+                eff_margin_ymin = 0.05 if dy_min < 0.015 else wall_margin
+                if sd2[0] > dir_thresh and dx_max < eff_margin_xmax:
+                    wall_too_close = True
+                elif sd2[0] < -dir_thresh and dx_min < eff_margin_xmin:
+                    wall_too_close = True
+                if sd2[1] > dir_thresh and dy_max < eff_margin_ymax:
+                    wall_too_close = True
+                elif sd2[1] < -dir_thresh and dy_min < eff_margin_ymin:
+                    wall_too_close = True
+                if wall_too_close:
+                    continue
+
                 # 도구 tip 벽 뚫림 방지: safe_approach_dist 계산
                 # 실제 로봇에서 도구가 벽을 뚫지 않도록 approach_dist를 동적 조정
                 safe_approach = STRIKE_APPROACH_DIST
@@ -82,7 +140,7 @@ class CushionShotPlanner:
                             max_a = (cue2[axis] - (bounds['x_max' if axis==0 else 'y_max'] - tip_margin)) / sd2[axis]
                         if max_a > 0:
                             safe_approach = min(safe_approach, max_a)
-                min_approach = 0.08  # 최소 8cm — PD 컨트롤러 수렴에 충분한 거리
+                min_approach = 0.10  # 최소 10cm — PD 수렴 + 도구 간섭 방지
                 safe_approach = max(min_approach, safe_approach)
                 # 최소 접근거리에서도 벽 밖이면 제외
                 tip_check = cue2 - sd2 * safe_approach
@@ -91,14 +149,19 @@ class CushionShotPlanner:
                     tip_check[1] < bounds['y_min'] + tip_margin or
                     tip_check[1] > bounds['y_max'] - tip_margin):
                     continue
-                # approach_dist가 줄었을 때만 저장 (기존 동작 최대한 유지)
+                # approach_dist가 줄었을 때: 저장 + score 페널티
                 if safe_approach < STRIKE_APPROACH_DIST:
                     r['safe_approach_dist'] = safe_approach
+                    # 축소 비율만큼 페널티 (축소가 클수록 큰 페널티)
+                    shrink_ratio = 1.0 - safe_approach / STRIKE_APPROACH_DIST
+                    penalty = int(shrink_ratio * 3000)  # 최대 3000점 감점
+                    r['score'] = max(r['score'] - penalty, 1)
+                    r['approach_penalty'] = penalty
 
                 angle_deg = np.degrees(angle) % 360
                 too_close = any(
                     min(abs(angle_deg - np.degrees(e['angle']) % 360),
-                        360 - abs(angle_deg - np.degrees(e['angle']) % 360)) < 5
+                        360 - abs(angle_deg - np.degrees(e['angle']) % 360)) < diversity_deg
                     for e in result)
                 if not too_close:
                     result.append(r)
@@ -108,11 +171,23 @@ class CushionShotPlanner:
 
         # 2쿠션 이상 전부 동등하게 취급 (안전 각도 우선)
         valid_all = [r for r in fast_results if r['score'] >= 2000]
-        top_fast = _filter_reachable_diverse(valid_all, max_n=25)
+        # DEBUG: priority 분포 확인
+        from collections import Counter
+        pri_dist = Counter(_angle_priority(r['angle']) for r in valid_all)
+        print(f"  [DEBUG] valid_all priority distribution: {dict(pri_dist)}")
+        top_fast = _filter_reachable_diverse(valid_all, max_n=25, diversity_deg=3)
+        if len(top_fast) < 5:  # 후보 부족 → diversity 완화하여 재시도
+            top_fast2 = _filter_reachable_diverse(valid_all, max_n=25, diversity_deg=1.5)
+            if len(top_fast2) > len(top_fast):
+                top_fast = top_fast2
         if not top_fast:
-            top_fast = _filter_reachable_diverse(fast_results, max_n=15)
+            top_fast = _filter_reachable_diverse(fast_results, max_n=15, diversity_deg=1.5)
         if not top_fast:
-            top_fast = [fast_results[0]]
+            # 모든 후보가 필터에 걸림 → 빈 candidates 반환 (unsafe 타격 방지)
+            pass
+        if top_fast:
+            pri_dist2 = Counter(_angle_priority(r['angle']) for r in top_fast)
+            print(f"  [DEBUG] top_fast priority distribution: {dict(pri_dist2)}")
         n_3c = sum(1 for r in valid_all if r['score'] >= 3000)
         n_2c = len(valid_all) - n_3c
         print(f"  [Filter] {n_3c} 3-cushion + {n_2c} 2-cushion → {len(top_fast)} reachable diverse")
@@ -139,15 +214,52 @@ class CushionShotPlanner:
                 'safe_approach_dist': r.get('safe_approach_dist', STRIKE_APPROACH_DIST),
             })
 
-        # 적은 쿠션 우선 (2쿠션 > 3쿠션, 예측 정확도 ↑), 같으면 score 내림차순
-        candidates.sort(key=lambda c: (c.get('cushion_count', 99), -c['score']))
-        print(f"  Found {len(candidates)} diverse candidates")
-        if candidates:
+        # score 최우선 → 쿠션 마진 → 로봇 근접도 (IK 검증은 state machine에서 수행)
+        def _cushion_margin_final(count):
+            if count == 3: return 0
+            if count == 2: return 1
+            return 2
+        candidates.sort(key=lambda c: (
+            0 if c['score'] > 0 else 1,  # 양 타겟 적중 예측을 항상 우선
+            -c['score'],                  # score 최우선 (robustness + position bonus)
+            _cushion_margin_final(c.get('cushion_count', 99)),
+            _angle_priority(np.radians(c['angle_deg'])),
+        ))
+        # positive score 후보만 유지 (negative = 양 타겟 미적중 예측)
+        positive_candidates = [c for c in candidates if c['score'] > 0]
+        print(f"  Found {len(candidates)} diverse candidates ({len(positive_candidates)} positive)")
+        if positive_candidates:
+            candidates = positive_candidates
             top = candidates[0]
             print(f"  Top: angle={top['angle_deg']:.1f}deg, "
                   f"cushions={top['cushion_count']}, "
                   f"hit_t1={top['hit_t1']}, hit_t2={top['hit_t2']}, "
                   f"score={top['score']}")
+        elif cue_pos is not None:
+            # 양 타겟 적중 예측 없음 → 벽 위치 탈출: 테이블 중앙 방향으로 단순 타격
+            center = np.array([
+                (self.bounds['x_min'] + self.bounds['x_max']) / 2,
+                (self.bounds['y_min'] + self.bounds['y_max']) / 2
+            ])
+            cue2 = np.array(cue_pos[:2])
+            escape_dir = center - cue2
+            escape_norm = np.linalg.norm(escape_dir)
+            if escape_norm > 1e-6:
+                escape_dir = escape_dir / escape_norm
+            else:
+                escape_dir = np.array([0.0, 1.0])
+            escape_angle = np.degrees(np.arctan2(escape_dir[1], escape_dir[0]))
+            candidates = [{
+                'strike_dir': escape_dir,
+                'strike_speed': MAX_TOOL_SPEED,
+                'ball_speed': MAX_TOOL_SPEED,
+                'ball_path': None, 'tgt1_path': None, 'tgt2_path': None,
+                'cushion_count': 0, 'hit_t1': False, 'hit_t2': False,
+                'score': 1, 'angle_deg': escape_angle,
+                'safe_approach_dist': STRIKE_APPROACH_DIST,
+                'is_escape': True,
+            }]
+            print(f"  [ESCAPE] No positive candidate → pushing toward center at {escape_angle:.1f}deg")
         return candidates
 
     # ================================================================
@@ -209,6 +321,7 @@ class CushionShotPlanner:
                              restitution=MAZE_BALL_RESTITUTION,
                              rollingFriction=MAZE_BALL_ROLLING_FRICTION,
                              spinningFriction=0.02,
+                             ccdSweptSphereRadius=MAZE_BALL_RADIUS * 0.5,
                              contactProcessingThreshold=0,
                              physicsClientId=sim)
             return bid
@@ -221,12 +334,15 @@ class CushionShotPlanner:
         for _ in range(50):
             p.stepSimulation(physicsClientId=sim)
 
-        # Grid Search: 0 ~ 360도를 0.5도 간격으로 촘촘하게 탐색
+        # Grid Search: 0 ~ 360도를 0.5도 간격으로 탐색
         n_initial = 720
-        speed_lo, speed_hi = ANNEAL_SPEED_RANGE
-        # 도구 1.0m/s → 공 ~1.85m/s (실측). 다양한 속도로 탐색
-        speed_hi = min(speed_hi, 1.85)
-        test_speeds = [speed_hi, speed_hi * 0.75, speed_hi * 0.5]
+        # 3개 속도로 검증 (GUI 실측 범위: 1.80~1.94 m/s)
+        speed_center = 1.87
+        test_speeds = [
+            speed_center,              # 1.870
+            speed_center * 1.05,       # 1.964
+            speed_center * 0.95,       # 1.777
+        ]
         angles = np.linspace(0, 2 * np.pi, n_initial, endpoint=False)
 
         results = []
@@ -238,24 +354,59 @@ class CushionShotPlanner:
                 results.append({'angle': angles[i], 'speed': spd,
                                 'score': score, **info})
 
-        for rnd in range(ANNEAL_N_REFINE_ROUNDS):
-            results.sort(key=lambda r: r['score'], reverse=True)
-            n_top = max(int(len(results) * ANNEAL_TOP_RATIO), 5)
-            top = results[:n_top]
-            sigma_a = np.radians(ANNEAL_SIGMA_ANGLE[rnd])
-            sigma_s = ANNEAL_SIGMA_SPEED[rnd]
-            for t in top:
-                for _ in range(n_initial // n_top):
-                    a = t['angle'] + np.random.normal(0, sigma_a)
-                    s = np.clip(t['speed'] + np.random.normal(0, sigma_s),
-                                speed_lo, speed_hi)
+        # Deterministic neighborhood refinement: 상위 grid 각도 주변 정밀 탐색
+        grid_results = sorted(results, key=lambda r: r['score'], reverse=True)
+        seen_angles = set()
+        top_angles = []
+        for r in grid_results:
+            bucket = round(np.degrees(r['angle']))
+            if bucket not in seen_angles and r['score'] >= 2000:
+                seen_angles.add(bucket)
+                top_angles.append(r['angle'])
+            if len(top_angles) >= 20:
+                break
+        offsets = [np.radians(d) for d in [-0.3, -0.2, -0.1, 0.1, 0.2, 0.3]]
+        for base_angle in top_angles:
+            for offset in offsets:
+                a = base_angle + offset
+                for spd in test_speeds:
                     score, info = self._simulate_ball_only(
                         sim, cue_id, tgt1_id, tgt2_id, cushion_ids,
-                        cue_pos, tgt1_pos, tgt2_pos, a, s)
-                    results.append({'angle': a, 'speed': s,
+                        cue_pos, tgt1_pos, tgt2_pos, a, spd)
+                    results.append({'angle': a, 'speed': spd,
                                     'score': score, **info})
 
         p.disconnect(sim)
+
+        # Robustness bonus: 같은 각도에서 복수 속도 성공 시 bonus
+        from collections import defaultdict
+        angle_bucket = defaultdict(list)
+        for r in results:
+            bucket = round(np.degrees(r['angle']) * 4) / 4
+            angle_bucket[bucket].append(r)
+        for bucket, group in angle_bucket.items():
+            n_success = sum(1 for r in group if r['score'] >= 3000)
+            if n_success >= 2:
+                for r in group:
+                    if r['score'] >= 3000:
+                        r['score'] += n_success * 1000
+                        r['robust_count'] = n_success
+
+        # Position play bonus: 큐볼이 벽에서 멀리 멈추는 각도에 보너스
+        bounds = self.bounds
+        for r in results:
+            if r['score'] >= 3000 and 'cue_final' in r:
+                cf = r['cue_final']
+                min_wall_dist = min(
+                    cf[0] - bounds['x_min'],
+                    bounds['x_max'] - cf[0],
+                    cf[1] - bounds['y_min'],
+                    bounds['y_max'] - cf[1]
+                )
+                pos_bonus = int(min(min_wall_dist / 0.10, 1.0) * 500)
+                r['score'] += pos_bonus
+                r['pos_bonus'] = pos_bonus
+
         return results
 
     def _simulate_ball_only(self, sim_id, cue_id, tgt1_id, tgt2_id, cushion_ids,
@@ -272,11 +423,9 @@ class CushionShotPlanner:
                                               physicsClientId=sim_id)
             p.resetBaseVelocity(tgt2_id, [0,0,0], [0,0,0], physicsClientId=sim_id)
 
-        # 하향 타격(20도)에 의한 바닥 반발 마찰 손실 반영 (속도 15% 감소)
-        tilt_penalty = 0.85 if MAZE_STRIKE_ANGLE_DEG > 0 else 1.0
-        effective_speed = speed * tilt_penalty
-        vx = effective_speed * np.cos(angle)
-        vy = effective_speed * np.sin(angle)
+        # 수평 타격
+        vx = speed * np.cos(angle)
+        vy = speed * np.sin(angle)
         p.resetBaseVelocity(cue_id, [vx, vy, 0], [0, 0, 0], physicsClientId=sim_id)
 
         # 시뮬 + 접촉 추적 (순서 기록)
@@ -315,12 +464,17 @@ class CushionShotPlanner:
                 if all(s < 0.005 for s in speeds_check):
                     break
 
+        # 큐볼 최종 위치
+        cue_final, _ = p.getBasePositionAndOrientation(cue_id, physicsClientId=sim_id)
+        cue_final_2d = [cue_final[0], cue_final[1]]
+
         score = self._score_result(cue_id, tgt1_id, tgt2_id, sim_id,
                                    cue_start, tgt1_start, tgt2_start,
                                    hit_t1, hit_t2, cushion_contacts, cue_path,
                                    events)
         return score, {'hit_t1': hit_t1, 'hit_t2': hit_t2,
-                       'cushion_count': cushion_contacts, 'events': events}
+                       'cushion_count': cushion_contacts, 'events': events,
+                       'cue_final': cue_final_2d}
 
     # ================================================================
     # 환경 생성

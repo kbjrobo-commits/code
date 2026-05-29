@@ -286,16 +286,16 @@ class AutonomousStateMachine:
         else:
             phi_candidates = np.linspace(0, 2 * np.pi, 12, endpoint=False)
 
-        # === ?꾨낫 ?쒗쉶: 媛??꾨낫 횞 媛?? 議고빀 ?쒕룄 ===
-        found = False
-        chosen_candidate = None
-        chosen_strike_dir_3d = None
+        # === Collect IK-valid candidates ===
+        MAX_VERIFY = 5
+        ik_valid_list = []
 
         for ci, candidate in enumerate(candidates):
+            if len(ik_valid_list) >= MAX_VERIFY:
+                break
             strike_dir_2d = candidate['strike_dir']
             strike_speed = candidate['strike_speed']
 
-            # 2D ??3D 諛⑺뼢 蹂??
             if self.demo_type in ('billiards', 'maze'):
                 angle_deg = BILLIARD_STRIKE_ANGLE_DEG if self.demo_type == 'billiards' else MAZE_STRIKE_ANGLE_DEG
                 angle_rad = np.radians(angle_deg)
@@ -319,7 +319,7 @@ class AutonomousStateMachine:
             best_phases = None
 
             for phi in phi_candidates:
-                trajectory, phases = self.traj.plan_strike(
+                traj_c, ph_c = self.traj.plan_strike(
                     T_current=T_current,
                     ball_pos=ball_pos,
                     strike_direction=strike_dir_3d,
@@ -332,14 +332,13 @@ class AutonomousStateMachine:
                     table_bounds=scan_data.get('table_bounds') if isinstance(scan_data, dict) else None
                 )
 
-                # ?μ븷臾?洹쇱젒 泥댄겕
                 obstacle_clear = True
                 if obs_list:
-                    clearance = 0.07  # ?μ븷臾?r(1.5cm) + EE(3cm) + ?ъ쑀(2.5cm)
-                    check_start = max(phases['approach'][1] - 200, 0)
-                    check_end = phases['strike'][1]
-                    for k in range(check_start, min(check_end, len(trajectory)), 10):
-                        ee_pos = trajectory[k][0:3, 3]
+                    clearance = 0.07
+                    check_start = max(ph_c['approach'][1] - 200, 0)
+                    check_end = ph_c['strike'][1]
+                    for k in range(check_start, min(check_end, len(traj_c)), 10):
+                        ee_pos = traj_c[k][0:3, 3]
                         for ox, oy, orr in obs_list:
                             dx = ee_pos[0] - ox
                             dy = ee_pos[1] - oy
@@ -349,53 +348,100 @@ class AutonomousStateMachine:
                                 break
                         if not obstacle_clear:
                             break
-
                 if not obstacle_clear:
                     continue
 
-                # IK ?ъ쟾寃利?
-                result = self.controller.ik.solve_trajectory_validated(
-                    q_current, trajectory
+                approach_end = ph_c.get('approach', (0, 0))[1]
+                val_from = int(approach_end * 0.65)
+                ik_result = self.controller.ik.solve_trajectory_validated(
+                    q_current, traj_c, validate_from=val_from
                 )
 
-                if result['valid']:
-                    if result['min_manipulability'] > best_min_w:
-                        best_min_w = result['min_manipulability']
-                        best_result = result
+                if ik_result['valid']:
+                    if ik_result['min_manipulability'] > best_min_w:
+                        best_min_w = ik_result['min_manipulability']
+                        best_result = ik_result
                         best_phi = phi
-                        best_trajectory = trajectory
-                        best_phases = phases
+                        best_trajectory = traj_c
+                        best_phases = ph_c
 
-            # ???꾨낫?먯꽌 ?좏슚??沅ㅼ쟻??李얠븯?쇰㈃ ?ъ슜
             if best_result is not None and best_result['valid']:
-                print(f"  [OK] Candidate #{ci+1}/{len(candidates)} valid "
-                      f"(angle={candidate['angle_deg']:.1f}deg, phi={np.degrees(best_phi):.0f}deg, "
-                      f"w={best_min_w:.4f}, "
-                      f"hit_t1={candidate.get('hit_t1',False)}, "
-                      f"hit_t2={candidate.get('hit_t2',False)}, "
-                      f"score={candidate['score']:.0f})")
-                found = True
-                chosen_candidate = candidate
-                chosen_strike_dir_3d = strike_dir_3d.copy()
-                trajectory = best_trajectory
-                phases = best_phases
-                break
+                print(f"  [IK-OK] #{ci+1}/{len(candidates)} "
+                      f"(angle={candidate['angle_deg']:.1f}, score={candidate['score']:.0f})")
+                ik_valid_list.append((candidate, best_result, best_trajectory, best_phases, strike_dir_3d.copy()))
             else:
-                if best_result is not None:
-                    reason = "IK invalid (joint limits or singularity)"
-                elif not obstacle_clear:
-                    reason = "obstacle collision"
-                else:
-                    reason = "IK validation failed"
-                print(f"  [SKIP] Candidate #{ci+1} (angle={candidate['angle_deg']:.1f}deg): {reason}")
+                reason = "IK invalid" if best_result else ("obstacle" if not obstacle_clear else "IK failed")
+                print(f"  [SKIP] #{ci+1} (angle={candidate['angle_deg']:.1f}): {reason}")
 
-        if not found:
-            print(f"  [FAIL] All {len(candidates)} candidates failed IK+obstacle check. Skipping strike.")
+        if not ik_valid_list:
+            print(f"  [FAIL] All candidates failed IK. Skipping.")
             self._strike_skipped = True
             self._strike_skip_reason = "IK or obstacle validation failed"
             return
 
-        # ?쒓컖??(?좏깮???꾨낫??3怨?沅ㅼ쟻)
+        # === saveState verification (maze only, multiple candidates) ===
+        import pybullet as _p
+        has_gui = hasattr(self.env, 'client')
+        use_verify = (self.demo_type == 'maze' and has_gui and len(ik_valid_list) > 1)
+
+        if use_verify:
+            print(f"  [VERIFY] Testing {len(ik_valid_list)} candidates via saveState...")
+
+        verified_idx = None
+        for vi, (cand, ik_res, traj, ph, sd3d) in enumerate(ik_valid_list):
+            is_last = (vi == len(ik_valid_list) - 1)
+
+            if use_verify and not is_last:
+                state_id = _p.saveState(physicsClientId=self.env.client)
+
+                if hasattr(self.env, 'reset_contact_tracking'):
+                    self.env.reset_contact_tracking()
+                if hasattr(self.controller, '_reenable_tool_cue_collision'):
+                    self.controller._reenable_tool_cue_collision()
+
+                exec_ok = self.controller.execute_trajectory(
+                    traj, dt=0.002, phase_indices=ph,
+                    strike_speed=cand['strike_speed'],
+                    q_trajectory=ik_res['q_trajectory']
+                )
+
+                if exec_ok is False:
+                    print(f"    [V#{vi+1}] Exec aborted")
+                    _p.restoreState(stateId=state_id, physicsClientId=self.env.client)
+                    _p.removeState(state_id, physicsClientId=self.env.client)
+                    continue
+
+                self.env.wait_balls_stop(timeout=8.0)
+
+                events = getattr(self.env, '_contact_events', [])
+                hit_t1 = getattr(self.env, '_contact_hit_t1', False)
+                hit_t2 = getattr(self.env, '_contact_hit_t2', False)
+                c_total = sum(1 for e in events if e == 'c')
+                valid_shot = hit_t1 and hit_t2 and c_total >= 2
+
+                if valid_shot:
+                    print(f"    [V#{vi+1}] OK angle={cand['angle_deg']:.1f} events={events}")
+                    _p.removeState(state_id, physicsClientId=self.env.client)
+                    verified_idx = vi
+                    break
+                else:
+                    print(f"    [V#{vi+1}] MISS angle={cand['angle_deg']:.1f} events={events}")
+                    _p.restoreState(stateId=state_id, physicsClientId=self.env.client)
+                    _p.removeState(state_id, physicsClientId=self.env.client)
+                    self.controller.move_home()
+                    time.sleep(0.3)
+            else:
+                verified_idx = vi
+                break
+
+        chosen_idx = verified_idx if verified_idx is not None else 0
+        chosen_candidate, best_result, trajectory, phases, chosen_strike_dir_3d = ik_valid_list[chosen_idx]
+        strike_speed = chosen_candidate['strike_speed']
+        found = True
+
+        print(f"  [SELECTED] #{chosen_idx+1}/{len(ik_valid_list)} "
+              f"angle={chosen_candidate['angle_deg']:.1f}, score={chosen_candidate['score']:.0f}")
+
         self.last_chosen_candidate = chosen_candidate
         self.last_executed_scan = scan_data.copy() if isinstance(scan_data, dict) else scan_data
         self.last_executed_plan = plan.copy() if isinstance(plan, dict) else plan
@@ -404,68 +450,43 @@ class AutonomousStateMachine:
         self.last_executed_q_trajectory = best_result['q_trajectory']
         self.last_planned_strike_dir_3d = chosen_strike_dir_3d
         self.last_planned_angle_deg = chosen_candidate.get('angle_deg')
-        raw_speed = chosen_candidate.get('input_speed_raw')
-        used_speed = chosen_candidate.get('ee_speed_used', chosen_candidate.get('strike_speed'))
-        if raw_speed is not None:
-            print(f"    [PLAN] selected angle={self.last_planned_angle_deg:.1f}deg, "
-                  f"raw_speed={raw_speed:.3f}, used_speed={used_speed:.3f}, "
-                  f"clipped={chosen_candidate.get('speed_was_clipped', False)}")
         print(f"    [PLAN] valid_3cushion={chosen_candidate.get('valid_3cushion')}, "
               f"events={chosen_candidate.get('events', [])}, "
               f"planned_ball_angle={chosen_candidate.get('initial_ball_angle_deg')}")
 
-        if hasattr(self.env, 'client'):
-            import pybullet as _p
+        if has_gui:
             surface_z = ball_pos[2]
-
-            # ?먮낵 寃쎈줈 (?뚮???
-            ball_path = chosen_candidate.get('ball_path')
-            if ball_path is not None and len(ball_path) > 1:
-                for i in range(len(ball_path) - 1):
-                    d = np.linalg.norm(np.array(ball_path[i]) - np.array(ball_path[i+1]))
-                    if d > 0.003:
-                        p1 = [ball_path[i][0], ball_path[i][1], surface_z]
-                        p2 = [ball_path[i+1][0], ball_path[i+1][1], surface_z]
-                        _p.addUserDebugLine(p1, p2, [0, 0.5, 1], lineWidth=3,
-                                           lifeTime=30, physicsClientId=self.env.client)
-
-            # 紐⑺몴怨? 寃쎈줈 (?몃???
-            tgt1_path = chosen_candidate.get('tgt1_path')
-            if tgt1_path is not None and len(tgt1_path) > 1:
-                for i in range(len(tgt1_path) - 1):
-                    d = np.linalg.norm(np.array(tgt1_path[i]) - np.array(tgt1_path[i+1]))
-                    if d > 0.003:
-                        p1 = [tgt1_path[i][0], tgt1_path[i][1], surface_z]
-                        p2 = [tgt1_path[i+1][0], tgt1_path[i+1][1], surface_z]
-                        _p.addUserDebugLine(p1, p2, [1, 0.9, 0], lineWidth=2,
-                                           lifeTime=30, physicsClientId=self.env.client)
-
-            # 紐⑺몴怨? 寃쎈줈 (鍮④컙??
-            tgt2_path = chosen_candidate.get('tgt2_path')
-            if tgt2_path is not None and len(tgt2_path) > 1:
-                for i in range(len(tgt2_path) - 1):
-                    d = np.linalg.norm(np.array(tgt2_path[i]) - np.array(tgt2_path[i+1]))
-                    if d > 0.01:
-                        p1 = [tgt2_path[i][0], tgt2_path[i][1], surface_z]
-                        p2 = [tgt2_path[i+1][0], tgt2_path[i+1][1], surface_z]
-                        _p.addUserDebugLine(p1, p2, [1, 0.2, 0.2], lineWidth=2,
-                                           lifeTime=30, physicsClientId=self.env.client)
-
-            n_pts = len(ball_path) if ball_path else 0
-            print(f"    [VIS] 3-ball planned paths drawn (cue:{n_pts}pts)")
+            for path_data, color, width, min_d in [
+                (chosen_candidate.get('ball_path'), [0, 0.5, 1], 3, 0.003),
+                (chosen_candidate.get('tgt1_path'), [1, 0.9, 0], 2, 0.003),
+                (chosen_candidate.get('tgt2_path'), [1, 0.2, 0.2], 2, 0.01),
+            ]:
+                if path_data and len(path_data) > 1:
+                    for i in range(len(path_data) - 1):
+                        d = np.linalg.norm(np.array(path_data[i]) - np.array(path_data[i+1]))
+                        if d > min_d:
+                            p1 = [path_data[i][0], path_data[i][1], surface_z]
+                            p2 = [path_data[i+1][0], path_data[i+1][1], surface_z]
+                            _p.addUserDebugLine(p1, p2, color, lineWidth=width,
+                                               lifeTime=30, physicsClientId=self.env.client)
+            print(f"    [VIS] paths drawn")
 
         print(f"  Trajectory: {len(trajectory)} points")
         print(f"    EE strike speed: {strike_speed:.3f} m/s")
 
-        # ?ㅽ뻾 ?? ?꾧뎄-?먮낵 異⑸룎 ?ы솢?깊솕
+        # Already executed via saveState verification - skip re-execution
+        already_executed = (use_verify and verified_idx is not None
+                            and verified_idx < len(ik_valid_list) - 1)
+        if already_executed:
+            self._verified_success = True
+            print(f"    [VERIFY] Already executed, skip re-execution")
+            return
+
         if hasattr(self.controller, '_reenable_tool_cue_collision'):
             self.controller._reenable_tool_cue_collision()
-
-        # ?묒큺 異붿쟻 由ъ뀑
         if hasattr(self.env, 'reset_contact_tracking'):
             self.env.reset_contact_tracking()
 
-        # ?ㅽ뻾 (?꾧뎄媛 臾쇰━?곸쑝濡?怨듭쓣 ?寃?
         result = self.controller.execute_trajectory(
             trajectory, dt=0.002, phase_indices=phases,
             strike_speed=strike_speed,
@@ -475,6 +496,7 @@ class AutonomousStateMachine:
             print(f"  Strike aborted (Ready err too large)")
             self._strike_skipped = True
             self._strike_skip_reason = "trajectory execution aborted"
+
 
     def _observe(self):
         """Observe the shot result."""
