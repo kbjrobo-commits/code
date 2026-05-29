@@ -399,18 +399,23 @@ def _replay_approach_only(indy, pb, q_traj_deg):
             break
 
 
-def _wait_indy(indy, timeout=30):
+def _wait_indy(indy, timeout=30, pb=None):
+    """실제 로봇 동작 완료 대기 + 시뮬 동기화 (7TestCode wait_indy와 동일)"""
     t0 = time.time()
     while time.time() - t0 < timeout:
+        if pb is not None:
+            # 실제 로봇 관절각도를 시뮬에 반영
+            q = indy.get_control_data()['q']
+            pb.MoveRobot(q, degree=True)
         if not indy.get_motion_data()["is_in_motion"]:
             break
         time.sleep(0.01)
 
 
 def _return_home(indy, pb):
-    """로봇을 홈 위치로 복귀."""
+    """로봇을 홈 위치로 복귀 (시뮬 동기화 포함)."""
     indy.movej(list(HOME_Q_DEG))
-    _wait_indy(indy)
+    _wait_indy(indy, pb=pb)
     pb.MoveRobot(HOME_Q_DEG, degree=True)
     time.sleep(1)
 
@@ -629,7 +634,7 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
     print(f"  [REAL] Phase 1: MoveJ Approach ({len(waypoint_indices)} waypoints)...")
     for wi, idx in enumerate(waypoint_indices):
         indy.movej([float(x) for x in q_traj_deg[idx]], vel_ratio=APPROACH_VEL, acc_ratio=APPROACH_ACC)
-        _wait_indy(indy)
+        _wait_indy(indy, pb=pb)
     print(f"  [REAL] Approach 완료")
 
     # ======== Phase 1.5: Align ========
@@ -637,19 +642,19 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
     print(f"  [REAL] Phase 1.5: Align")
     time.sleep(0.5)
     indy.movej([float(x) for x in q_ready], vel_ratio=10, acc_ratio=30)
-    _wait_indy(indy)
+    _wait_indy(indy, pb=pb)
     time.sleep(0.5)
 
     # ======== Phase 2: Strike (MoveJ to follow-through) ========
     print(f"  [REAL] Phase 2: MoveJ Strike!")
     indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=300)
-    _wait_indy(indy)
+    _wait_indy(indy, pb=pb)
     print(f"  [REAL] Strike 완료!")
 
     # ======== Phase 3: Home ========
     print(f"  [REAL] Phase 3: Home")
     indy.movej(list(HOME_Q_DEG), vel_ratio=30, acc_ratio=100)
-    _wait_indy(indy)
+    _wait_indy(indy, pb=pb)
 
 
 # ============================================================
@@ -845,6 +850,10 @@ if __name__ == '__main__':
     ik = IKSolver(pb.my_robot.pinModel, gain=IK_GAIN, damping=IK_DAMPING)
     indy = IndyDCP3(robot_ip=args.robot_ip, index=0)
     print(f"  로봇 연결: {args.robot_ip}")
+    # 실제 로봇 현재 위치를 시뮬에 동기화
+    q_real = indy.get_control_data()['q']
+    pb.MoveRobot(q_real, degree=True)
+    print(f"  현재 q(deg): {[round(x,1) for x in q_real]}")
 
     robot_id = pb.my_robot.robotId
     ee_link = pb.my_robot.RobotEEJointIdx[-1]
