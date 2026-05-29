@@ -645,9 +645,26 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
     _wait_indy(indy, pb=pb)
     time.sleep(0.5)
 
-    # ======== Phase 2: Strike (MoveJ to follow-through) ========
-    print(f"  [REAL] Phase 2: MoveJ Strike!")
-    indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=300)
+    # ======== Phase 2: Strike (MoveL 직선 타격) ========
+    # movej는 곡선이 되므로, 타격만 movel로 직선 보장
+    # FK 변환 없이: 실제 로봇 현재 위치 + 시뮬 delta로 계산
+    p_ready = indy.get_control_data()['p']  # [x_mm, y_mm, z_mm, rx, ry, rz]
+
+    # 시뮬에서 ready→follow 간 Cartesian 변위 계산
+    T_ready_sim = pb.my_robot.pinModel.FK(np.radians(q_ready))
+    T_follow_sim = pb.my_robot.pinModel.FK(np.radians(q_follow_deg))
+    delta_mm = (T_follow_sim[:3, 3] - T_ready_sim[:3, 3]) * 1000.0  # m → mm
+
+    # 실제 로봇 좌표계에서 follow 위치 = 현재 위치 + delta (자세는 유지)
+    p_follow = list(p_ready)
+    p_follow[0] += delta_mm[0]
+    p_follow[1] += delta_mm[1]
+    p_follow[2] += delta_mm[2]
+    # 자세(rx, ry, rz)는 그대로 유지
+
+    print(f"  [REAL] Phase 2: MoveL Strike!")
+    print(f"    delta: [{delta_mm[0]:.1f}, {delta_mm[1]:.1f}, {delta_mm[2]:.1f}] mm")
+    indy.movel(p_follow, vel_ratio=100, acc_ratio=300)
     _wait_indy(indy, pb=pb)
     print(f"  [REAL] Strike 완료!")
 
