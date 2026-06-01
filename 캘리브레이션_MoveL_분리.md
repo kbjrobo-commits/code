@@ -4,13 +4,13 @@
 
 실기 타격 시 **movej 곡선으로 접근 후 movel** 이 아니라,
 
-1. **Approach** = `movel`만 → 로봇 **완전 정지**
+1. **Approach/Align** = **`movej`** (IK 관절, 기본)
 2. 사람이 확인 후 **[Enter] = START**
-3. **Strike** = `movel` **직선 1번**만
+3. **Strike** = `movel` **직선 1번**
 4. **Retract** = `movel` 상승
-5. (trial 끝) **Home** = `movej`만
+5. (trial 끝) **Home** = `movej`
 
-**Approach ↔ Strike 사이에는 `movej` 없음.**
+**Approach ↔ Strike 사이 추가 movej 없음** (홈 제외).
 
 ---
 
@@ -132,6 +132,7 @@ python calibration_loop_movel.py --optimize-only
 | `--plan-file` | 계획 npz 경로 (기본 `last_calib_shot.npz`) |
 | `--axis x\|y` | position + approach 시 필수 |
 | `--skip-fk-offset` | FK TCP 보정 생략 |
+| `--approach-movel` | Approach도 movel (기본은 movej) |
 | `--allow-auto-strike` | full 모드에서 Enter 생략 (비권장) |
 | `--test` | 로봇 없이 시뮬 loss 확인 |
 
