@@ -284,87 +284,108 @@ def detect_balls() :
 
         return None
 
-    # def detect_ball(mask, frame, color):
-    #     kernel = np.ones((7, 7), np.uint8)
+    def detect_ball_fixed(mask, frame, color):
 
-    #     mask = cv2.morphologyEx(
-    #         mask,
-    #         cv2.MORPH_CLOSE,
-    #         kernel
-    #     )
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (15, 15)
+        )
 
-    #     contours, _ = cv2.findContours(
-    #         mask,
-    #         cv2.RETR_EXTERNAL,
-    #         cv2.CHAIN_APPROX_SIMPLE
-    #     )
+        mask = cv2.morphologyEx(
+            mask,
+            cv2.MORPH_CLOSE,
+            kernel,
+            iterations=2
+        )
 
-    #     best_ball = None
-    #     max_score = 0
+        contours, _ = cv2.findContours(
+            mask,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE
+        )
 
-    #     for cnt in contours:
-    #         area = cv2.contourArea(cnt)
+        best_ball = None
+        max_score = 0
 
-    #         if area < 300:
-    #             continue
+        for cnt in contours:
+            hull = cv2.convexHull(cnt)
+            area = cv2.contourArea(hull)
 
-    #         perimeter = cv2.arcLength(cnt, True)
+            if area < 300:
+                continue
 
-    #         if perimeter == 0:
-    #             continue
+            perimeter = cv2.arcLength(hull, True)
 
-    #         (circle_cx, circle_cy), radius = cv2.minEnclosingCircle(cnt)
+            if perimeter == 0:
+                continue
 
-    #         circle_area = np.pi * radius * radius
+            (circle_cx, circle_cy), radius = \
+                cv2.minEnclosingCircle(hull)
 
-    #         fill_ratio = area / circle_area
+            circle_area = np.pi * radius * radius
 
-    #         if fill_ratio < 0.35:
-    #             continue
+            fill_ratio = area / circle_area
 
-    #         M = cv2.moments(cnt)
+            if fill_ratio < 0.35:
+                continue
 
-    #         if M["m00"] == 0:
-    #             continue
+            M = cv2.moments(hull)
 
-    #         cx = M["m10"] / M["m00"]
-    #         cy = M["m01"] / M["m00"]
+            if M["m00"] == 0:
+                continue
 
-    #         table_x, table_y = pixel_to_table(cx, cy)
+            cx = M["m10"] / M["m00"]
+            cy = M["m01"] / M["m00"]
 
-    #         score = area
+            table_x, table_y = pixel_to_table(cx, cy)
 
-    #         if score > max_score:
+            score = area
+            if score > max_score:
+                max_score = score
+                best_ball = {
+                    "position": (
+                        float(table_x),
+                        float(table_y)
+                    ),
+                    "center": (cx, cy),
+                    "radius": radius,
+                    "hull": hull
+                }
 
-    #             max_score = score
+        if best_ball is not None:
+            cx, cy = best_ball["center"]
+            radius = best_ball["radius"]
 
-    #             best_ball = {
-    #                 "position": (
-    #                     float(table_x),
-    #                     float(table_y)
-    #                 ),
-    #                 "center": (cx, cy),
-    #                 "radius": radius
-    #             }
+            draw_cx = int(round(cx))
+            draw_cy = int(round(cy))
 
-    #     if best_ball is not None:
-    #         cx, cy = best_ball["center"]
-    #         radius = best_ball["radius"]
+            cv2.circle(
+                frame,
+                (draw_cx, draw_cy),
+                int(round(radius)),
+                color,
+                3
+            )
 
-    #         draw_cx = int(round(cx))
-    #         draw_cy = int(round(cy))
+            cv2.circle(
+                frame,
+                (draw_cx, draw_cy),
+                4,
+                (255, 0, 0),
+                -1
+            )
 
-    #         cv2.circle(
-    #             frame,
-    #             (draw_cx, draw_cy),
-    #             int(round(radius)),
-    #             color,
-    #             3
-    #         )
+            cv2.drawContours(
+                frame,
+                [best_ball["hull"]],
+                -1,
+                (0, 255, 0),
+                2
+            )
 
-    #         return best_ball["position"]
+            return best_ball["position"]
 
-    #     return None
+        return None
 
     # 초기 프레임 잡기(더미 촬영)
     for _ in range(30):
