@@ -139,9 +139,15 @@ COLOR_OBSTACLE = [0.6, 0.2, 0.2, 1]
 MAZE_TABLE_LENGTH = 0.31           # 테이블 길이 X (m)
 MAZE_TABLE_WIDTH = 0.63           # 테이블 폭 Y (m)
 MAZE_TABLE_HEIGHT = 0.02           # 테이블 두께 (m)
+<<<<<<< HEAD
+MAZE_TABLE_SURFACE_HEIGHT = 0.039    # 테이블 바닥면 높이 (m)
+MAZE_TABLE_CENTER_X = 0.485        # 테이블 중심 X (원래 위치 복원)
+MAZE_TABLE_CENTER_Y = 0.162       # 테이블 중심 Y (원래 위치 복원)
+=======
 MAZE_TABLE_SURFACE_HEIGHT = 0.037    # 테이블 바닥면 높이 (m)
 MAZE_TABLE_CENTER_X = 0.485        # 테이블 중심 X (원래 위치 복원)
 MAZE_TABLE_CENTER_Y = 0.165         # 테이블 중심 Y (원래 위치 복원)
+>>>>>>> d6e09040cb7d7f02d76c12e347fe0331a7ec3a27
 MAZE_GRID_SPACING = 0.05           # 자석 그리드 간격 (m)
 MAZE_OBSTACLE_RADIUS = 0.015       # 장애물 원기둥 반지름 (m)
 MAZE_OBSTACLE_HEIGHT = 0.05        # 장애물 높이 (m)
@@ -153,6 +159,13 @@ MAZE_BALL_RESTITUTION = 0.85       # 큐볼 반발계수
 MAZE_BALL_FRICTION = 0.15           # 실제 당구공 수준 (0.3은 과도)
 MAZE_BALL_ROLLING_FRICTION = 0.012  # 올림: 실측 기반 보정 (0.008→0.012)
 MAZE_STRIKE_ANGLE_DEG = 0          # 수평 타격 (ㄴ자 도구로 수평으로 침)
+
+# 사이드 포켓(홀) — 긴 변(y±, 폭 0.63m) 레일 정중앙 2곳 (짧은 변 x± 모서리 아님)!!
+# 플래너만 사용: PyBullet에 구멍 없음, 첫 쿠션 후 홀 쪽 경로 탐색 제외
+MAZE_SIDE_POCKET_AVOID = True
+MAZE_SIDE_POCKET_HALF_LENGTH = 0.025   # 레일 방향(X) 홀 개구부 반길이 → 총 ~5cm
+MAZE_SIDE_POCKET_INWARD_DEPTH = 0.07   # 레일에서 테이블 안쪽 회피 깊이 (m)
+MAZE_SIDE_POCKET_MARGIN = 0.012        # 홀 구간 추가 여유 (m)
 
 # ============================================================
 # 어닐링 탐색 파라미터
