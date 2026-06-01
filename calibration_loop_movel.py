@@ -2,7 +2,7 @@
 """
 MoveL 기반 캘리브레이션 (Approach / Strike 분리)
 ==============================================
-실기 타격은 movej 곡선이 아니라 movel 직선으로 재생합니다.
+기본: Approach/Align=movej, Strike/Retract=movel (Enter로 분리).
 
   Phase 1: 좌표 — +x / +y 약타격, 키보드로 offset 보정
   Phase 2: 물리 — 3쿠션 플래너 + 카메라 전/후 → Nelder-Mead
@@ -36,6 +36,7 @@ from project.real_movel_player import (
     DEFAULT_PLAN_FILE,
     compute_fk_offset_mm,
     execute_movel_split,
+    ik_trajectory_deg,
     load_shot_plan,
     movej_home,
     plan_cushion_shot,
@@ -117,11 +118,13 @@ def _return_home(indy, pb):
 
 
 def _execute_real_shot(indy, pb, traj, phases, speed, fk_offset_mm, real_step,
-                       plan_file, confirm_strike, meta=None):
+                       plan_file, confirm_strike, meta=None, approach_mode='movej',
+                       q_traj_deg=None):
     """real_step: full | approach | strike"""
     if real_step == 'approach':
         run_real_approach_only(
-            indy, pb, traj, phases, speed, fk_offset_mm, plan_file, meta=meta)
+            indy, pb, traj, phases, speed, fk_offset_mm, plan_file, meta=meta,
+            approach_mode=approach_mode, q_traj_deg=q_traj_deg)
         return None
     if real_step == 'strike':
         run_real_strike_only(indy, pb, plan_file, speed=speed, wait_start=True)
@@ -130,6 +133,8 @@ def _execute_real_shot(indy, pb, traj, phases, speed, fk_offset_mm, real_step,
         indy, pb, traj, phases, speed,
         confirm_before_strike=confirm_strike,
         fk_offset_mm=fk_offset_mm,
+        approach_mode=approach_mode,
+        q_traj_deg=q_traj_deg,
     )
     return True
 
@@ -161,7 +166,8 @@ def _position_keyboard(offset, axis, offset_size):
     return offset, done
 
 
-def run_position_approach_once(indy, pb, env, ik, axis, fk_offset_mm, plan_file):
+def run_position_approach_once(indy, pb, env, ik, axis, fk_offset_mm, plan_file,
+                               approach_mode='movej'):
     """분리 실행 1단계: 비전 → 시뮬 → Approach(movel) → 정지·계획 저장."""
     offset = load_position_offset()
     strike_dir = np.array([1.0, 0.0, 0.0]) if axis == 'x' else np.array([0.0, 1.0, 0.0])
@@ -171,9 +177,11 @@ def run_position_approach_once(indy, pb, env, ik, axis, fk_offset_mm, plan_file)
     print(f"  [SIM] {'+x' if axis == 'x' else '+y'} 약타격 미리보기...")
     run_sim_trajectory(pb, ik, traj, phases)
     time.sleep(0.3)
+    q_deg = ik_trajectory_deg(pb, ik, traj) if approach_mode == 'movej' else None
     run_real_approach_only(
         indy, pb, traj, phases, speed, fk_offset_mm, plan_file,
-        meta={'calib': 'position', 'axis': axis, 'offset': offset})
+        meta={'calib': 'position', 'axis': axis, 'offset': offset},
+        approach_mode=approach_mode, q_traj_deg=q_deg)
     print(f"\n  다음 명령:\n"
           f"    python calibration_loop_movel.py --phase position "
           f"--real-step strike --plan-file {plan_file}")
@@ -198,7 +206,7 @@ def run_position_strike_once(indy, pb, plan_file):
 
 
 def _run_position_axis(indy, pb, env, ik, offset, axis, fk_offset_mm, confirm_strike,
-                       real_step='full', plan_file=PLAN_FILE):
+                       real_step='full', plan_file=PLAN_FILE, approach_mode='movej'):
     """axis: 'x' (+x shot → y offset) or 'y' (+y shot → x offset)."""
     offset_size = 0.003
     strike_dir = np.array([1.0, 0.0, 0.0]) if axis == 'x' else np.array([0.0, 1.0, 0.0])
@@ -220,17 +228,20 @@ def _run_position_axis(indy, pb, env, ik, offset, axis, fk_offset_mm, confirm_st
         time.sleep(0.3)
 
         meta = {'calib': 'position', 'axis': axis, 'offset': offset}
+        q_deg = ik_trajectory_deg(pb, ik, traj) if approach_mode == 'movej' else None
         try:
             if real_step == 'approach':
                 run_real_approach_only(
-                    indy, pb, traj, phases, speed, fk_offset_mm, plan_file, meta=meta)
+                    indy, pb, traj, phases, speed, fk_offset_mm, plan_file, meta=meta,
+                    approach_mode=approach_mode, q_traj_deg=q_deg)
                 print(f"\n  Ready 정지. Strike:\n"
                       f"    python calibration_loop_movel.py --phase position "
                       f"--real-step strike --plan-file {plan_file}")
                 return offset
             _execute_real_shot(
                 indy, pb, traj, phases, speed, fk_offset_mm, real_step, plan_file,
-                confirm_strike, meta=meta)
+                confirm_strike, meta=meta, approach_mode=approach_mode,
+                q_traj_deg=q_deg)
         except Exception as e:
             print(f"  [ERROR] 실기: {e}")
             try:
@@ -260,7 +271,8 @@ def _run_position_axis(indy, pb, env, ik, offset, axis, fk_offset_mm, confirm_st
 
 
 def run_position_calibration(indy, pb, env, ik, fk_offset_mm, confirm_strike=True,
-                             real_step='full', plan_file=PLAN_FILE, axis=None):
+                             real_step='full', plan_file=PLAN_FILE, axis=None,
+                             approach_mode='movej'):
     offset = load_position_offset()
     print(f"\n{'='*60}")
     print("  Phase 1: 좌표 캘리브레이션 (MoveL)")
@@ -270,16 +282,17 @@ def run_position_calibration(indy, pb, env, ik, fk_offset_mm, confirm_strike=Tru
     if real_step == 'approach':
         if axis not in ('x', 'y'):
             raise SystemExit("--real-step approach 는 --axis x 또는 y 필요")
-        return run_position_approach_once(indy, pb, env, ik, axis, fk_offset_mm, plan_file)
+        return run_position_approach_once(
+            indy, pb, env, ik, axis, fk_offset_mm, plan_file, approach_mode)
     if real_step == 'strike':
         return run_position_strike_once(indy, pb, plan_file)
 
     offset = _run_position_axis(
         indy, pb, env, ik, offset, 'x', fk_offset_mm, confirm_strike,
-        real_step, plan_file)
+        real_step, plan_file, approach_mode)
     offset = _run_position_axis(
         indy, pb, env, ik, offset, 'y', fk_offset_mm, confirm_strike,
-        real_step, plan_file)
+        real_step, plan_file, approach_mode)
     print(f"\n  Phase 1 완료: x={offset['x']:.4f}, y={offset['y']:.4f}")
     return offset
 
@@ -332,7 +345,7 @@ def _observe_balls_after_strike():
 
 def run_physics_calibration(indy, pb, env, ik, num_trials, fk_offset_mm,
                             allow_auto_strike=False, real_step='full',
-                            plan_file=PLAN_FILE):
+                            plan_file=PLAN_FILE, approach_mode='movej'):
     trials = []
     print(f"\n{'='*60}")
     print(f"  Phase 2: 물리 캘리브레이션 (MoveL) × {num_trials}")
@@ -373,17 +386,20 @@ def run_physics_calibration(indy, pb, env, ik, num_trials, fk_offset_mm,
             'strike_angle': float(np.radians(angle_deg)),
             'strike_speed': float(speed),
         }
+        q_deg = ik_trajectory_deg(pb, ik, traj) if approach_mode == 'movej' else None
         try:
             if real_step == 'approach':
                 run_real_approach_only(
-                    indy, pb, traj, phases, speed, fk_offset_mm, plan_file, meta=meta)
+                    indy, pb, traj, phases, speed, fk_offset_mm, plan_file, meta=meta,
+                    approach_mode=approach_mode, q_traj_deg=q_deg)
                 print(f"\n  Trial {n+1} Approach 완료. Strike:\n"
                       f"    python calibration_loop_movel.py --phase physics "
                       f"--real-step strike --plan-file {plan_file}")
                 return trials
             _execute_real_shot(
                 indy, pb, traj, phases, speed, fk_offset_mm, 'full', plan_file,
-                confirm_strike=not allow_auto_strike, meta=meta)
+                confirm_strike=not allow_auto_strike, meta=meta,
+                approach_mode=approach_mode, q_traj_deg=q_deg)
         except Exception as e:
             print(f"  [ERROR] 실기: {e}")
             _return_home(indy, pb)
@@ -553,6 +569,8 @@ def main():
                         help=f'분리 실행 시 계획 npz (기본 {PLAN_FILE})')
     parser.add_argument('--axis', choices=['x', 'y'],
                         help='position + approach 일 때 타격 축 (+x 또는 +y)')
+    parser.add_argument('--approach-movel', action='store_true',
+                        help='Approach/Align도 movel (기본=movej)')
     parser.add_argument('--allow-auto-strike', action='store_true',
                         help='full 모드: Enter 없이 Strike (비권장)')
     parser.add_argument('--skip-fk-offset', action='store_true')
@@ -618,14 +636,17 @@ def main():
         sync_sim_from_real(indy, pb, verbose=True)
         print("  [strike 모드] 로봇 Ready 유지 — Approach 직후 자세에서 실행")
 
-    print("\n  [안내] Approach(movel) 정지 → [Enter]=START → Strike(movel)")
+    approach_mode = 'movel' if args.approach_movel else 'movej'
+    appr = approach_mode
+    print(f"\n  [안내] Approach({appr}) 정지 → [Enter]=START → Strike(movel)")
     print("         분리: --real-step approach 후 --real-step strike\n")
 
     confirm = not args.allow_auto_strike
     if args.phase in ('position', 'all'):
         run_position_calibration(
             indy, pb, env, ik, fk_offset, confirm_strike=confirm,
-            real_step=args.real_step, plan_file=args.plan_file, axis=args.axis)
+            real_step=args.real_step, plan_file=args.plan_file, axis=args.axis,
+            approach_mode=approach_mode)
 
     if args.phase in ('physics', 'all'):
         if args.real_step == 'strike':
@@ -636,7 +657,8 @@ def main():
             run_physics_calibration(
                 indy, pb, env, ik, args.num_trials, fk_offset,
                 allow_auto_strike=args.allow_auto_strike,
-                real_step=args.real_step, plan_file=args.plan_file)
+                real_step=args.real_step, plan_file=args.plan_file,
+                approach_mode=approach_mode)
 
     pb.disconnect()
     print("\n  완료.")
