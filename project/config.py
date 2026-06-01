@@ -139,15 +139,9 @@ COLOR_OBSTACLE = [0.6, 0.2, 0.2, 1]
 MAZE_TABLE_LENGTH = 0.31           # 테이블 길이 X (m)
 MAZE_TABLE_WIDTH = 0.63           # 테이블 폭 Y (m)
 MAZE_TABLE_HEIGHT = 0.02           # 테이블 두께 (m)
-<<<<<<< HEAD
-MAZE_TABLE_SURFACE_HEIGHT = 0.039    # 테이블 바닥면 높이 (m)
-MAZE_TABLE_CENTER_X = 0.485        # 테이블 중심 X (원래 위치 복원)
-MAZE_TABLE_CENTER_Y = 0.162       # 테이블 중심 Y (원래 위치 복원)
-=======
 MAZE_TABLE_SURFACE_HEIGHT = 0.037    # 테이블 바닥면 높이 (m)
 MAZE_TABLE_CENTER_X = 0.485        # 테이블 중심 X (원래 위치 복원)
 MAZE_TABLE_CENTER_Y = 0.165         # 테이블 중심 Y (원래 위치 복원)
->>>>>>> d6e09040cb7d7f02d76c12e347fe0331a7ec3a27
 MAZE_GRID_SPACING = 0.05           # 자석 그리드 간격 (m)
 MAZE_OBSTACLE_RADIUS = 0.015       # 장애물 원기둥 반지름 (m)
 MAZE_OBSTACLE_HEIGHT = 0.05        # 장애물 높이 (m)
