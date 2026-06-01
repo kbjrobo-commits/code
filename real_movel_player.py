@@ -14,6 +14,12 @@ APPROACH_VEL = 20
 APPROACH_ACC = 50
 ALIGN_VEL = 10
 ALIGN_ACC = 30
+# Approach만 movej (Strike는 movel 직선)
+APPROACH_MOVEJ_WAYPOINTS = 20
+APPROACH_MOVEJ_VEL = 100
+APPROACH_MOVEJ_ACC = 100
+ALIGN_MOVEJ_VEL = 50
+ALIGN_MOVEJ_ACC = 50
 
 
 def SE3_to_p6(T, offset_mm=None):
@@ -94,12 +100,56 @@ def strike_target_from_ready(p_ready, T_ready, T_follow):
     return p_strike, float(np.linalg.norm(1000.0 * delta_m))
 
 
+def _compute_strike_plan(trajectory, phases, fk_offset_mm=None):
+    """플래너 SE3 ready/follow → Strike용 movel 목표 (TCP mm)."""
+    traj = np.asarray(trajectory)
+    a1 = phases['approach'][1]
+    follow_end = phases['follow'][1]
+    T_ready = traj[a1 - 1]
+    p_ready = SE3_to_p6(T_ready, fk_offset_mm)
+    T_follow = traj[min(follow_end - 1, len(traj) - 1)]
+    p_strike, planner_mm = strike_target_from_ready(p_ready, T_ready, T_follow)
+    return {
+        'p_ready_cmd': np.array(p_ready),
+        'p_strike_cmd': np.array(p_strike),
+        'planner_strike_mm': planner_mm,
+    }
+
+
+def run_approach_movej(indy, pb, q_traj_deg, phases):
+    """Approach + Align: 관절 movej만 (Strike 전 단계)."""
+    q_all = np.asarray(q_traj_deg, dtype=float).reshape(-1, 6)
+    a0, a1 = phases['approach']
+    segment = q_all[a0:a1]
+    if len(segment) < 1:
+        raise ValueError('approach 구간 IK 궤적이 비어 있음')
+
+    n_wp = min(APPROACH_MOVEJ_WAYPOINTS, len(segment))
+    step = max(1, (len(segment) - 1) // max(1, n_wp - 1))
+    indices = list(range(0, len(segment), step))
+    if indices[-1] != len(segment) - 1:
+        indices.append(len(segment) - 1)
+
+    sync_sim_from_real(indy, pb)
+    print(f"  [REAL] Approach movej ({len(indices)} pts)...")
+    for i in indices:
+        indy.movej(
+            [float(x) for x in segment[i]],
+            vel_ratio=APPROACH_MOVEJ_VEL, acc_ratio=APPROACH_MOVEJ_ACC)
+        wait_indy(indy, sync_sim=True, pb=pb)
+
+    q_ready = [float(x) for x in segment[-1]]
+    print("  [REAL] Align ready (movej)...")
+    time.sleep(0.3)
+    indy.movej(q_ready, vel_ratio=ALIGN_MOVEJ_VEL, acc_ratio=ALIGN_MOVEJ_ACC)
+    wait_indy(indy, sync_sim=True, pb=pb)
+
+
 def run_approach_movel(indy, pb, trajectory, phases, fk_offset_mm=None):
-    """Approach + Align (movel). 반환: plan dict (p_ready_cmd, p_strike_cmd)."""
+    """Approach + Align (movel)."""
     traj = np.asarray(trajectory)
     off = fk_offset_mm
     a0, a1 = phases['approach']
-    follow_end = phases['follow'][1]
 
     sync_sim_from_real(indy, pb)
     wps = list(range(a0, a1, APPROACH_MOVEL_STEP))
@@ -111,24 +161,31 @@ def run_approach_movel(indy, pb, trajectory, phases, fk_offset_mm=None):
         indy.movel(list(SE3_to_p6(traj[idx], off)), vel_ratio=APPROACH_VEL, acc_ratio=APPROACH_ACC)
         wait_indy(indy, sync_sim=True, pb=pb)
 
-    T_ready = traj[a1 - 1]
-    p_ready = SE3_to_p6(T_ready, off)
-    print("  [REAL] Align ready...")
+    p_ready = SE3_to_p6(traj[a1 - 1], off)
+    print("  [REAL] Align ready (movel)...")
     time.sleep(0.3)
     indy.movel(list(p_ready), vel_ratio=ALIGN_VEL, acc_ratio=ALIGN_ACC)
     wait_indy(indy, sync_sim=True, pb=pb)
     verify_movel(indy, p_ready, tol_mm=5.0)
 
-    T_follow = traj[min(follow_end - 1, len(traj) - 1)]
-    p_strike, planner_mm = strike_target_from_ready(p_ready, T_ready, T_follow)
+
+def run_approach(indy, pb, trajectory, phases, approach_mode='movej',
+                 q_traj_deg=None, fk_offset_mm=None):
+    """Approach (movel 또는 movej) 후 Strike용 TCP plan 반환."""
+    if approach_mode == 'movej':
+        if q_traj_deg is None:
+            raise ValueError("approach_mode='movej' 는 IK q_traj_deg 필요")
+        run_approach_movej(indy, pb, q_traj_deg, phases)
+    elif approach_mode == 'movel':
+        run_approach_movel(indy, pb, trajectory, phases, fk_offset_mm)
+    else:
+        raise ValueError(f"unknown approach_mode: {approach_mode}")
+
+    plan = _compute_strike_plan(trajectory, phases, fk_offset_mm)
     p_now = indy.get_control_data()['p']
     print(f"  [REAL] Ready. TCP=[{p_now[0]:.0f},{p_now[1]:.0f},{p_now[2]:.0f}] "
-          f"strike Δ={planner_mm:.0f}mm")
-    return {
-        'p_ready_cmd': np.array(p_ready),
-        'p_strike_cmd': np.array(p_strike),
-        'planner_strike_mm': planner_mm,
-    }
+          f"strike Δ={plan['planner_strike_mm']:.0f}mm  (다음: Enter → movel Strike)")
+    return plan
 
 
 def run_strike_movel(indy, pb, p_strike_cmd, p_ready_cmd=None,
@@ -272,11 +329,21 @@ def load_shot_plan(path):
     }
 
 
+def ik_trajectory_deg(pb, ik, trajectory):
+    """SE3 궤적 → 관절각(deg) 배열 (movej approach용)."""
+    q_traj = ik.solve_trajectory(pb.my_robot.q.copy(), list(trajectory))
+    return np.degrees(np.asarray(q_traj).reshape(-1, 6))
+
+
 def run_real_approach_only(indy, pb, trajectory, phases, speed, fk_offset_mm=None,
-                           plan_path=None, meta=None):
-    """Approach+Align(movel) 후 정지. 계획 파일 저장."""
+                           plan_path=None, meta=None, approach_mode='movej',
+                           q_traj_deg=None):
+    """Approach 후 정지. 계획 파일 저장."""
     plan_path = plan_path or DEFAULT_PLAN_FILE
-    movel_plan = run_approach_movel(indy, pb, trajectory, phases, fk_offset_mm)
+    movel_plan = run_approach(
+        indy, pb, trajectory, phases, approach_mode, q_traj_deg, fk_offset_mm)
+    meta = dict(meta or {})
+    meta['approach_mode'] = approach_mode
     save_shot_plan(plan_path, trajectory, phases, speed, movel_plan, fk_offset_mm, meta)
     print("  [REAL] Approach 종료 — 로봇 Ready 유지. Strike는 별도 명령으로.")
     return movel_plan
@@ -298,26 +365,26 @@ def run_real_strike_only(indy, pb, plan_path=None, speed=None, do_retract=True,
     return ok, loaded
 
 
-def prompt_strike_start():
+def prompt_strike_start(approach_mode='movej'):
     """Approach 완료 후 로봇 정지 — 사용자 START(Enter)까지 Strike 안 함."""
+    appr = 'movej' if approach_mode == 'movej' else 'movel'
     print("\n" + "=" * 56)
-    print("  APPROACH 완료 — 로봇 정지 (이 구간에 movej 없음)")
+    print(f"  APPROACH 완료 ({appr}) — 로봇 정지")
     print("  큐·큐대·자세 확인 후")
-    print("  >>> [Enter] = START → MoveL 직선 STRIKE 만 실행")
+    print("  >>> [Enter] = START → MoveL 직선 STRIKE (+ Retract movel)")
     print("=" * 56)
     input()
 
 
 def execute_movel_split(indy, pb, trajectory, phases, speed,
                         confirm_before_strike=True, fk_offset_mm=None,
-                        do_retract=True, strike_vel_ratio=None):
-    """Approach(movel만) → 정지 → [START] → Strike(movel만) → Retract(movel).
-
-    Approach와 Strike 사이에는 movej를 쓰지 않습니다.
-    """
-    movel_plan = run_approach_movel(indy, pb, trajectory, phases, fk_offset_mm)
+                        do_retract=True, strike_vel_ratio=None,
+                        approach_mode='movej', q_traj_deg=None):
+    """Approach(movel|movej) → 정지 → [Enter] → Strike(movel) → Retract(movel)."""
+    movel_plan = run_approach(
+        indy, pb, trajectory, phases, approach_mode, q_traj_deg, fk_offset_mm)
     if confirm_before_strike:
-        prompt_strike_start()
+        prompt_strike_start(approach_mode)
     else:
         print("  [WARN] --allow-auto-strike: Enter 없이 곧바로 Strike")
     ok = run_strike_movel(
