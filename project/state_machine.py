@@ -67,6 +67,11 @@ class AutonomousStateMachine:
         print(f"  Autonomous {self.demo_type.upper()} State Machine Started")
         print("=" * 60)
 
+        if self.demo_type == 'pocket_phase1':
+            return self._run_phase1_pocket(max_attempts)
+        if self.demo_type == 'pocket_phase2':
+            return self._run_phase2_trickshot(max_attempts)
+
         successes = 0
         while self.attempt < max_attempts:
             self.attempt += 1
@@ -237,6 +242,40 @@ class AutonomousStateMachine:
                 'target_pocket': result['pocket']
             }
 
+    def _think_pocket(self, scan_data, phase, target_ball_id, marker_pos=None):
+        """pocket_demo용 THINK: 포켓/정밀정지 탐색."""
+        cue_pos = scan_data['cue_pos']
+        target_pos = scan_data['target_pos']
+        other_balls = scan_data.get('other_balls', [])
+
+        if phase == 'pocket':
+            print(f"  Running pocket shot search...")
+            candidates = self.planner.plan_pocket_shot(
+                cue_pos, target_pos, other_balls)
+        else:  # precision
+            print(f"  Running precision shot search (marker={marker_pos})...")
+            candidates = self.planner.plan_precision_shot(
+                cue_pos, target_pos, marker_pos, other_balls)
+
+        if not candidates:
+            print("  [FAIL] No valid candidate found.")
+            return {
+                'strike_dir': np.array([1.0, 0.0]),
+                'strike_speed': 0.0,
+                'ball_pos': cue_pos,
+                'candidates': [],
+            }
+
+        best = candidates[0]
+        print(f"  Found {len(candidates)} candidates")
+        print(f"  Top: angle={best['angle_deg']:.1f}deg, score={best['score']:.0f}")
+        return {
+            'strike_dir': best['strike_dir'],
+            'strike_speed': best['strike_speed'],
+            'ball_pos': cue_pos,
+            'candidates': candidates,
+        }
+
     def _strike(self, scan_data, plan):
         """ALIGN & STRIKE: ?꾨낫 ?쒗쉶 ??IK+?μ븷臾?寃利???泥?踰덉㎏ ?좏슚 ?꾨낫留??ㅽ뻾
 
@@ -247,10 +286,10 @@ class AutonomousStateMachine:
         T_current = self.controller.get_current_T()
         ball_pos = plan['ball_pos']
 
-        if self.demo_type == 'maze' and not plan.get('candidates'):
-            print("  [FAIL] No valid 3-cushion candidate to execute.")
+        if self.demo_type in ('maze', 'pocket_phase1', 'pocket_phase2') and not plan.get('candidates'):
+            print("  [FAIL] No valid candidate to execute.")
             self._strike_skipped = True
-            self._strike_skip_reason = "no valid 3-cushion candidate"
+            self._strike_skip_reason = "no valid candidate"
             return
 
         # ?꾨떖 媛?μ꽦 ?뺤씤
@@ -281,7 +320,7 @@ class AutonomousStateMachine:
 
         q_current = self.controller.get_current_q()
         # ㄴ자 도구는 비대칭 → phi 회전하면 도구 끝이 공에서 벗어남
-        if self.demo_type == 'maze':
+        if self.demo_type in ('maze', 'pocket_phase1', 'pocket_phase2'):
             phi_candidates = [0.0]
         else:
             phi_candidates = np.linspace(0, 2 * np.pi, 12, endpoint=False)
@@ -296,7 +335,7 @@ class AutonomousStateMachine:
             strike_dir_2d = candidate['strike_dir']
             strike_speed = candidate['strike_speed']
 
-            if self.demo_type in ('billiards', 'maze'):
+            if self.demo_type in ('billiards', 'maze', 'pocket_phase1', 'pocket_phase2'):
                 angle_deg = BILLIARD_STRIKE_ANGLE_DEG if self.demo_type == 'billiards' else MAZE_STRIKE_ANGLE_DEG
                 angle_rad = np.radians(angle_deg)
                 horiz = np.array(strike_dir_2d[:2]).flatten()
@@ -379,10 +418,11 @@ class AutonomousStateMachine:
             self._strike_skip_reason = "IK or obstacle validation failed"
             return
 
-        # === saveState verification (maze only, multiple candidates) ===
+        # === saveState verification (maze + pocket phases, multiple candidates) ===
         import pybullet as _p
         has_gui = hasattr(self.env, 'client')
-        use_verify = (self.demo_type == 'maze' and has_gui and len(ik_valid_list) > 1)
+        use_verify = (self.demo_type in ('maze', 'pocket_phase1')
+                      and has_gui and len(ik_valid_list) > 1)
 
         if use_verify:
             print(f"  [VERIFY] Testing {len(ik_valid_list)} candidates via saveState...")
@@ -397,6 +437,9 @@ class AutonomousStateMachine:
                 _saved_cue = list(_p.getBasePositionAndOrientation(self.env.cue_ball_id, physicsClientId=self.env.client)[0])
                 _saved_t1 = list(_p.getBasePositionAndOrientation(self.env.target_ball_id, physicsClientId=self.env.client)[0])
                 _saved_t2 = list(_p.getBasePositionAndOrientation(self.env.ball2_id, physicsClientId=self.env.client)[0]) if hasattr(self.env, 'ball2_id') else None
+                _saved_t3 = list(_p.getBasePositionAndOrientation(self.env.ball3_id, physicsClientId=self.env.client)[0]) if hasattr(self.env, 'ball3_id') and self.env.ball3_id is not None else None
+                # _pocketed_balls 셋 저장
+                _saved_pocketed = set(getattr(self.env, '_pocketed_balls', set()))
 
                 if hasattr(self.env, 'reset_contact_tracking'):
                     self.env.reset_contact_tracking()
@@ -414,7 +457,7 @@ class AutonomousStateMachine:
                     try:
                         _p.restoreState(stateId=state_id, physicsClientId=self.env.client)
                     except Exception:
-                        # 수동 복원: 공 위치 리셋 + 로봇 홈
+                        # 수동 복원: 모든 공 위치 리셋
                         for bid, pos in [
                             (self.env.cue_ball_id, _saved_cue),
                             (self.env.target_ball_id, _saved_t1),
@@ -424,10 +467,16 @@ class AutonomousStateMachine:
                         if _saved_t2 is not None and hasattr(self.env, 'ball2_id'):
                             _p.resetBasePositionAndOrientation(self.env.ball2_id, _saved_t2, [0,0,0,1], physicsClientId=self.env.client)
                             _p.resetBaseVelocity(self.env.ball2_id, [0,0,0], [0,0,0], physicsClientId=self.env.client)
+                        if _saved_t3 is not None and hasattr(self.env, 'ball3_id'):
+                            _p.resetBasePositionAndOrientation(self.env.ball3_id, _saved_t3, [0,0,0,1], physicsClientId=self.env.client)
+                            _p.resetBaseVelocity(self.env.ball3_id, [0,0,0], [0,0,0], physicsClientId=self.env.client)
                     try:
                         _p.removeState(state_id, physicsClientId=self.env.client)
                     except Exception:
                         pass
+                    # _pocketed_balls 셋 복원
+                    if hasattr(self.env, '_pocketed_balls'):
+                        self.env._pocketed_balls = set(_saved_pocketed)
 
                 if exec_ok is False:
                     print(f"    [V#{vi+1}] Exec aborted")
@@ -436,12 +485,46 @@ class AutonomousStateMachine:
 
                 self.env.wait_balls_stop(timeout=8.0)
 
-                events = getattr(self.env, '_contact_events', [])
-                from project.physics.cushion_rules import valid_cushion_sequence
-                valid_shot = valid_cushion_sequence(events, 2)
+                # 데모 타입에 따라 검증 기준 분리
+                if self.demo_type == 'pocket_phase1':
+                    # Phase 1: 목적구가 포켓에 들어갔는지 + 큐볼 스크래치 체크
+                    target_id = scan_data.get('_target_ball_id')
+                    target_in = target_id and self.env.is_ball_pocketed(target_id)
+                    cue_scratched = self.env.is_ball_pocketed(self.env.cue_ball_id)
+                    if target_in and not cue_scratched:
+                        valid_shot = True
+                    elif target_in and cue_scratched:
+                        valid_shot = False
+                        print(f"    [V#{vi+1}] SCRATCH — target pocketed but cue also scratched")
+                    else:
+                        valid_shot = False
+                elif self.demo_type == 'pocket_phase2':
+                    # Phase 2: 목적구가 마커 근처에 정지했는지 체크
+                    target_id = scan_data.get('_target_ball_id')
+                    marker_pos = scan_data.get('_marker_pos')
+                    cue_scratched = self.env.is_ball_pocketed(self.env.cue_ball_id)
+                    if target_id and marker_pos is not None:
+                        t_pos, _ = _p.getBasePositionAndOrientation(
+                            target_id, physicsClientId=self.env.client)
+                        dist = np.linalg.norm(
+                            np.array(t_pos[:2]) - np.array(marker_pos[:2]))
+                        if dist <= PRECISION_STOP_TOLERANCE and not cue_scratched:
+                            valid_shot = True
+                            print(f"    [V#{vi+1}] OK dist={dist*100:.1f}cm")
+                        elif cue_scratched:
+                            valid_shot = False
+                            print(f"    [V#{vi+1}] SCRATCH dist={dist*100:.1f}cm")
+                        else:
+                            valid_shot = False
+                    else:
+                        valid_shot = False
+                else:
+                    events = getattr(self.env, '_contact_events', [])
+                    from project.physics.cushion_rules import valid_cushion_sequence
+                    valid_shot = valid_cushion_sequence(events, 2)
 
                 if valid_shot:
-                    print(f"    [V#{vi+1}] OK angle={cand['angle_deg']:.1f} events={events}")
+                    print(f"    [V#{vi+1}] OK angle={cand['angle_deg']:.1f}")
                     try:
                         _p.removeState(state_id, physicsClientId=self.env.client)
                     except Exception:
@@ -449,7 +532,7 @@ class AutonomousStateMachine:
                     verified_idx = vi
                     break
                 else:
-                    print(f"    [V#{vi+1}] MISS angle={cand['angle_deg']:.1f} events={events}")
+                    print(f"    [V#{vi+1}] MISS angle={cand['angle_deg']:.1f}")
                     _safe_restore()
                     self.controller.move_home()
                     time.sleep(0.3)
@@ -632,3 +715,386 @@ class AutonomousStateMachine:
             target_pos = self.env.get_target_ball_position()
             nearest, dist = self.env.get_nearest_pocket(target_pos)
             return dist
+
+    # ================================================================
+    # Pocket Demo: 다중 타격 루프
+    # ================================================================
+
+    def _run_phase1_pocket(self, max_attempts_per_ball=4):
+        """Phase 1: 목적구 3개를 포켓에 넣기 (독립 데모).
+
+        고정 순서 없음 — 매 샷마다 남은 공 전부 평가 후 최적 조합 선택.
+        """
+        print("\n" + "=" * 60)
+        print("  PHASE 1: POCKET SHOT (3 balls)")
+        print("=" * 60)
+
+        ball_names = ['yellow', 'red', 'black']
+        ball_id_getters = [
+            lambda: self.env.target_ball_id,
+            lambda: self.env.ball2_id,
+            lambda: getattr(self.env, 'ball3_id', None),
+        ]
+        ball_pos_getters = [
+            lambda: self.env.get_target_ball_position(),
+            lambda: self.env.get_ball2_position(),
+            lambda: self.env.get_ball3_position(),
+        ]
+
+        pocketed = [False, False, False]
+        total_shots = 0
+        max_total_shots = max_attempts_per_ball * 3  # 전체 최대 시도 횟수
+
+        while sum(pocketed) < 3 and total_shots < max_total_shots:
+            total_shots += 1
+            remaining = [i for i in range(3) if not pocketed[i]
+                         and ball_id_getters[i]() is not None]
+            if not remaining:
+                break
+
+            print(f"\n--- Shot {total_shots}/{max_total_shots} "
+                  f"(remaining: {[ball_names[i] for i in remaining]}) ---")
+
+            # 남은 모든 공에 대해 planner 실행, 최고 점수 공 선택
+            best_ball_idx = None
+            best_plan = None
+            best_score = -float('inf')
+
+            for ball_idx in remaining:
+                ball_id = ball_id_getters[ball_idx]()
+                scan_data = self._scan_pocket(ball_idx, pocketed)
+                if scan_data is None:
+                    pocketed[ball_idx] = True
+                    continue
+
+                plan = self._think_pocket(scan_data, 'pocket', ball_id)
+                top_score = plan['candidates'][0]['score'] if plan.get('candidates') else -1
+
+                print(f"  {ball_names[ball_idx]}: top_score={top_score:.0f}")
+
+                if top_score > best_score:
+                    best_score = top_score
+                    best_ball_idx = ball_idx
+                    best_plan = plan
+                    best_scan = scan_data
+
+                # 포켓 성공 후보 발견 시 바로 선택 (나머지 공 탐색 skip)
+                if top_score >= 100000:
+                    print(f"  [EARLY] Pocket success found for {ball_names[ball_idx]}, skipping others")
+                    break
+
+            if best_ball_idx is None or best_plan is None or not best_plan.get('candidates'):
+                print("  [FAIL] No viable shot for any remaining ball")
+                continue
+
+            ball_idx = best_ball_idx
+            ball_id = ball_id_getters[ball_idx]()
+            print(f"\n  [CHOSEN] {ball_names[ball_idx]} "
+                  f"(score={best_score:.0f})")
+
+            # STRIKE (기존 _strike() 재활용 — IK+saveState 검증 포함)
+            self._strike_skipped = False
+            self._strike(best_scan, best_plan)
+
+            if getattr(self, '_strike_skipped', False):
+                print(f"  Strike skipped: {getattr(self, '_strike_skip_reason', 'unknown')}")
+                self.controller.move_home()
+                time.sleep(0.5)
+                continue
+
+            # OBSERVE
+            self.env.wait_balls_stop(timeout=8.0)
+            if self.env.is_ball_pocketed(ball_id):
+                pocketed[ball_idx] = True
+                pocket_idx = self.env.which_pocket(ball_id)
+                print(f"  [SUCCESS] {ball_names[ball_idx]} pocketed! (pocket {pocket_idx})")
+                if self.env.is_ball_pocketed(self.env.cue_ball_id):
+                    print(f"  [WARNING] CUE BALL SCRATCHED! Resetting cue...")
+                    self.env.reset_balls(cue_pos=self.env.cue_start_pos)
+                    time.sleep(0.5)
+            else:
+                cue_scratched = self.env.is_ball_pocketed(self.env.cue_ball_id)
+                if cue_scratched:
+                    print(f"  [FAIL] Cue ball scratched! Resetting...")
+                    self.env.reset_balls(cue_pos=self.env.cue_start_pos)
+                    time.sleep(0.5)
+                else:
+                    target_final = ball_pos_getters[ball_idx]()
+                    if target_final is not None:
+                        nearest_dist = min(
+                            np.linalg.norm(target_final[:2] - pp[:2])
+                            for pp in self.env.pocket_positions
+                        )
+                        print(f"  [MISS] Nearest pocket dist: {nearest_dist*100:.1f}cm")
+
+            self.controller.move_home()
+            time.sleep(0.5)
+
+        n_pocketed = sum(pocketed)
+        print(f"\n{'='*40}")
+        print(f"  PHASE 1 RESULT: {n_pocketed}/3 pocketed in {total_shots} shots")
+        print(f"{'='*40}")
+        return n_pocketed > 0
+
+    def _run_phase2_precision(self, max_attempts_per_ball=4):
+        """Phase 2: 목적구 3개를 마커 위치에 정밀 배치 (독립 데모).
+
+        공이 y축 중심선 위에 일렬 배치된 상태에서 시작.
+        """
+        print("\n" + "=" * 60)
+        print("  PHASE 2: PRECISION PLACEMENT (3 balls)")
+        print("=" * 60)
+
+        ball_names = ['yellow', 'red', 'black']
+        ball_id_getters = [
+            lambda: self.env.target_ball_id,
+            lambda: self.env.ball2_id,
+            lambda: getattr(self.env, 'ball3_id', None),
+        ]
+        ball_pos_getters = [
+            lambda: self.env.get_target_ball_position(),
+            lambda: self.env.get_ball2_position(),
+            lambda: self.env.get_ball3_position(),
+        ]
+
+        # 공 재배치 (시뮬: lineup, 실제: 수동)
+        if hasattr(self.env, 'setup_lineup'):
+            self.env.setup_lineup()
+            time.sleep(1.0)
+
+        # 마커 위치 (시뮬: 랜덤, 실제: ArUco 인식)
+        marker_positions = getattr(self, 'marker_positions', None)
+        if marker_positions is None:
+            marker_positions = self._generate_random_markers()
+        self.marker_positions = marker_positions
+
+        print(f"  Markers: {[f'({m[0]:.3f},{m[1]:.3f})' for m in marker_positions]}")
+
+        placed = [False, False, False]
+
+        for ball_idx in range(3):
+            ball_id = ball_id_getters[ball_idx]()
+            if ball_id is None:
+                continue
+
+            marker = marker_positions[ball_idx]
+            print(f"\n--- Target: {ball_names[ball_idx]} → marker ({marker[0]:.3f}, {marker[1]:.3f}) ---")
+
+            for attempt in range(max_attempts_per_ball):
+                print(f"\n  [Attempt {attempt+1}/{max_attempts_per_ball}]")
+
+                scan_data = self._scan_pocket(ball_idx, [False, False, False])
+                if scan_data is None:
+                    break
+
+                # Phase 2: scan_data에 마커 위치 포함 (saveState 검증용)
+                scan_data['_marker_pos'] = marker
+
+                plan = self._think_pocket(scan_data, 'precision', ball_id,
+                                           marker_pos=marker)
+
+                if not plan.get('candidates'):
+                    print("  [FAIL] No candidate")
+                    self.controller.move_home()
+                    time.sleep(0.5)
+                    continue
+
+                self._strike_skipped = False
+                self._strike(scan_data, plan)
+
+                if getattr(self, '_strike_skipped', False):
+                    print(f"  Strike skipped: {getattr(self, '_strike_skip_reason', 'unknown')}")
+                    self.controller.move_home()
+                    time.sleep(0.5)
+                    continue
+
+                self.env.wait_balls_stop(timeout=8.0)
+                target_final = ball_pos_getters[ball_idx]()
+                if target_final is not None:
+                    dist = np.linalg.norm(target_final[:2] - marker[:2])
+                    print(f"  Distance to marker: {dist*100:.1f}cm (target: {PRECISION_STOP_TOLERANCE*100:.0f}cm)")
+                    if dist <= PRECISION_STOP_TOLERANCE:
+                        placed[ball_idx] = True
+                        print(f"  [SUCCESS] {ball_names[ball_idx]} placed within tolerance!")
+
+                # 큐볼 스크래치 체크
+                if self.env.is_ball_pocketed(self.env.cue_ball_id):
+                    print(f"  [WARNING] Cue scratched! Resetting...")
+                    self.env.reset_balls(cue_pos=self.env.cue_start_pos)
+                    time.sleep(0.5)
+
+                self.controller.move_home()
+                time.sleep(0.5)
+
+                if placed[ball_idx]:
+                    break
+
+            if not placed[ball_idx]:
+                print(f"  [FAIL] Could not place {ball_names[ball_idx]}")
+
+        n_placed = sum(placed)
+        print(f"\n{'='*40}")
+        print(f"  PHASE 2 RESULT: {n_placed}/3 placed (≤{PRECISION_STOP_TOLERANCE*100:.0f}cm)")
+        print(f"{'='*40}")
+        return n_placed > 0
+
+    def _run_phase2_trickshot(self, max_attempts=1):
+        """Phase 2 POSTECH 트릭샷: 큐볼 한번으로 2공을 O 위치로 보내기."""
+        import pybullet as _p
+
+        print("\n  === POSTECH Trick Shot ===")
+        print("  PC'S.TECH → POSTECH")
+
+        # POSTECH O 배치
+        meta = self.env.setup_postech_o()
+
+        cue_pos = self.env.get_cue_ball_position()
+        trick1_pos = np.array(meta['trick1_pos'])
+        trick2_pos = np.array(meta['trick2_pos'])
+        target1_goal = np.array(meta['target1_goal'])
+        target2_goal = np.array(meta['target2_goal'])
+        c_positions = [
+            np.array(_p.getBasePositionAndOrientation(
+                bid, physicsClientId=self.env.client)[0])
+            for bid in meta['c_ball_ids']
+        ]
+
+        time.sleep(2.0)  # 배치 확인용 대기
+
+        # 트릭샷 탐색
+        print("\n  Running trick shot search...")
+        candidates = self.planner.plan_trick_shot(
+            cue_pos, trick1_pos, trick2_pos,
+            target1_goal, target2_goal, c_positions
+        )
+
+        if not candidates:
+            print("  [FAIL] No trick shot candidate found")
+            return False
+
+        # 최고 후보 표시
+        top = candidates[0]
+        print(f"\n  Best candidate:")
+        print(f"    Angle: {top['angle_deg']:.1f}°")
+        print(f"    Speed: {top['ball_speed']:.2f} m/s (tool: {top['strike_speed']:.2f} m/s)")
+        print(f"    Expected dist: {top['total_dist']*100:.1f}cm")
+        print(f"    Match: {top['match']}")
+
+        # scan_data 구성 (기존 _strike와 호환)
+        scan_data = {
+            'cue_pos': cue_pos,
+            'target_pos': trick1_pos,  # 첫 번째 trick ball
+            'other_positions': [trick2_pos] + c_positions,
+        }
+
+        plan = {
+            'candidates': candidates,
+            'ball_pos': cue_pos,
+        }
+
+        # IK + 실행
+        self._strike_skipped = False
+        self._strike(scan_data, plan)
+
+        if getattr(self, '_strike_skipped', False):
+            print(f"  Strike skipped: {getattr(self, '_strike_skip_reason', 'unknown')}")
+            # 다음 후보 시도
+            for ci in range(1, min(len(candidates), 5)):
+                print(f"\n  Trying candidate #{ci+1}...")
+                plan['candidates'] = candidates[ci:]
+                self._strike_skipped = False
+                self._strike(scan_data, plan)
+                if not getattr(self, '_strike_skipped', False):
+                    break
+
+        self.env.wait_balls_stop(timeout=10.0)
+
+        # 결과 측정
+        t1_final = np.array(_p.getBasePositionAndOrientation(
+            self.env.target_ball_id, physicsClientId=self.env.client)[0])
+        t2_final = np.array(_p.getBasePositionAndOrientation(
+            self.env.ball2_id, physicsClientId=self.env.client)[0])
+
+        # 두 가지 매칭
+        d_a1 = np.linalg.norm(t1_final[:2] - target1_goal[:2])
+        d_a2 = np.linalg.norm(t2_final[:2] - target2_goal[:2])
+        d_b1 = np.linalg.norm(t1_final[:2] - target2_goal[:2])
+        d_b2 = np.linalg.norm(t2_final[:2] - target1_goal[:2])
+
+        if d_a1 + d_a2 <= d_b1 + d_b2:
+            dist1, dist2 = d_a1, d_a2
+        else:
+            dist1, dist2 = d_b1, d_b2
+
+        total = dist1 + dist2
+
+        print(f"\n{'='*50}")
+        print(f"  TRICK SHOT RESULT")
+        print(f"  Ball 1 distance to target: {dist1*100:.1f}cm")
+        print(f"  Ball 2 distance to target: {dist2*100:.1f}cm")
+        print(f"  Total distance: {total*100:.1f}cm")
+        print(f"{'='*50}")
+
+        self.controller.move_home()
+        return total < 0.10  # 10cm 이내면 성공
+
+    def _scan_pocket(self, target_ball_idx, pocketed_list):
+        """pocket_demo용 SCAN: 현재 타격 대상 공 + 다른 공 위치."""
+        cue_pos = self.env.get_cue_ball_position()
+
+        ball_getters = [
+            self.env.get_target_ball_position,
+            self.env.get_ball2_position,
+            lambda: self.env.get_ball3_position(),
+        ]
+
+        target_pos = ball_getters[target_ball_idx]()
+        if target_pos is None:
+            return None
+
+        # 포켓된 공은 테이블 아래에 있으므로 필터
+        ball_ids = [
+            self.env.target_ball_id,
+            self.env.ball2_id,
+            getattr(self.env, 'ball3_id', None),
+        ]
+        target_id = ball_ids[target_ball_idx]
+        if target_id is not None and self.env.is_ball_pocketed(target_id):
+            return None
+
+        # 다른 공 위치 (포켓되지 않은 것만)
+        other_balls = []
+        for i in range(3):
+            if i == target_ball_idx:
+                continue
+            if pocketed_list[i]:
+                continue
+            bid = ball_ids[i]
+            if bid is None:
+                continue
+            if self.env.is_ball_pocketed(bid):
+                continue
+            pos = ball_getters[i]()
+            if pos is not None:
+                other_balls.append(pos)
+
+        return {
+            'cue_pos': cue_pos,
+            'target_pos': target_pos,
+            'other_balls': other_balls,
+            'table_bounds': self.env.table_bounds,
+            '_target_ball_id': target_id,
+        }
+
+    def _generate_random_markers(self):
+        """Phase 2용 랜덤 마커 위치 생성 (테이블 내부)."""
+        b = self.env.table_bounds
+        sz = self.env._surface_z
+        margin = 0.05
+        markers = []
+        for _ in range(3):
+            x = np.random.uniform(b['x_min'] + margin, b['x_max'] - margin)
+            y = np.random.uniform(b['y_min'] + margin, b['y_max'] - margin)
+            markers.append(np.array([x, y, sz]))
+        return markers
+

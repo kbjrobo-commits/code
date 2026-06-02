@@ -441,6 +441,10 @@ class RobotController:
                     env._contact_events.append('c')
                 env._contact_cushion_set = cur_cushion
 
+                # 포켓 범위 내 공 감지 및 제거 (실시간)
+                if hasattr(env, 'check_and_pocket_balls'):
+                    env.check_and_pocket_balls()
+
         self.pb._thread_pre = _streaming_thread_pre
 
         # 踰꾪띁 ?뚯쭊 ?湲?

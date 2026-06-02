@@ -29,8 +29,8 @@ IK_MAX_ITER = 10              # IK 반복 횟수 per waypoint
 # ============================================================
 # 타격 파라미터 (공통)
 # ============================================================
-STRIKE_APPROACH_DIST = 0.10    # 타격 전 접근 거리 (m) — 시뮬/실제 균형 (0.08→0.10)
-STRIKE_FOLLOW_DIST = 0.06     # Follow-through 거리 (m) — 테이블 관통 방지용 축소
+STRIKE_APPROACH_DIST = 0.08    # 타격 전 접근 거리 (m) — 시뮬/실제 균형 (0.08→0.10)
+STRIKE_FOLLOW_DIST = 0.04     # Follow-through 거리 (m) — 테이블 관통 방지용 축소
 APPROACH_DURATION = 3.0        # 접근 궤적 시간 (s)
 STRIKE_HEIGHT_OFFSET = 0.0     # 타격 높이 오프셋 (m)
 RETRACT_HEIGHT = 0.15          # 타격 후 수직 상승 높이 (m)
@@ -132,6 +132,7 @@ COLOR_HOLE_BLACK = [0.05, 0.05, 0.05, 1]
 COLOR_STEEL = [0.7, 0.7, 0.75, 1]
 COLOR_WOOD = [0.55, 0.35, 0.15, 1]
 COLOR_OBSTACLE = [0.6, 0.2, 0.2, 1]
+COLOR_BLACK_BALL = [0.08, 0.08, 0.08, 1]
 
 # ============================================================
 # 미로 환경 파라미터
@@ -139,19 +140,19 @@ COLOR_OBSTACLE = [0.6, 0.2, 0.2, 1]
 MAZE_TABLE_LENGTH = 0.305          # 테이블 길이 X (m)
 MAZE_TABLE_WIDTH = 0.635           # 테이블 폭 Y (m)
 MAZE_TABLE_HEIGHT = 0.02           # 테이블 두께 (m)
-MAZE_TABLE_SURFACE_HEIGHT = 0.031    # 테이블 바닥면 높이 (m)
+MAZE_TABLE_SURFACE_HEIGHT = 0.031  # 테이블 바닥면 높이 (m)
 MAZE_TABLE_CENTER_X = 0.485        # 테이블 중심 X (원래 위치 복원)
 MAZE_TABLE_CENTER_Y = 0.165         # 테이블 중심 Y (원래 위치 복원)
 MAZE_GRID_SPACING = 0.05           # 자석 그리드 간격 (m)
 MAZE_OBSTACLE_RADIUS = 0.015       # 장애물 원기둥 반지름 (m)
 MAZE_OBSTACLE_HEIGHT = 0.05        # 장애물 높이 (m)
 MAZE_CUSHION_HEIGHT = 0.05         # 쿠션 높이 (m)
-MAZE_CUSHION_RESTITUTION = 0.8     # 쿠션 반발계수
+MAZE_CUSHION_RESTITUTION = 0.80   # 쿠션 반발계수
 MAZE_BALL_RADIUS = 0.012           # 큐볼 반지름 (m) — 지름 24mm
 MAZE_BALL_MASS = 0.01              # 큐볼 질량 (kg) — 가벼운 공
-MAZE_BALL_RESTITUTION = 0.85       # 큐볼 반발계수
-MAZE_BALL_FRICTION = 0.15           # 실제 당구공 수준 (0.3은 과도)
-MAZE_BALL_ROLLING_FRICTION = 0.012  # 올림: 실측 기반 보정 (0.008→0.012)
+MAZE_BALL_RESTITUTION = 0.8       # 큐볼 반발계수
+MAZE_BALL_FRICTION = 0.17           # 실제 당구공 수준 (0.3은 과도)
+MAZE_BALL_ROLLING_FRICTION = 0.017  # 올림: 실측 기반 보정 (0.008→0.012)a
 MAZE_STRIKE_ANGLE_DEG = 0          # 수평 타격 (ㄴ자 도구로 수평으로 침)
 
 # 사이드 포켓(홀) — 긴 변(y±, 폭 0.63m) 레일 정중앙 2곳 (짧은 변 x± 모서리 아님)!!
@@ -181,3 +182,26 @@ BALL_SPEED_GAIN = (
     * TOOL_HEAD_MASS / (TOOL_HEAD_MASS + MAZE_BALL_MASS)
     * BALL_SPEED_GAIN_SCALE
 )
+
+# ============================================================
+# 포켓볼 데모 파라미터
+# ============================================================
+# 기존 실측 보정된 MAZE_BALL 파라미터 재활용
+# (lateralFriction=0.17, rollingFriction=0.017, restitution=0.8)
+POCKET_DEMO_FRICTION = MAZE_BALL_FRICTION
+POCKET_DEMO_ROLLING_FRICTION = MAZE_BALL_ROLLING_FRICTION
+POCKET_DEMO_BALL_RESTITUTION = MAZE_BALL_RESTITUTION
+POCKET_DEMO_CUSHION_RESTITUTION = 0.5  # 쿠션 반발계수 (낮음, 붙는 현상)
+
+# 포켓 6개 (코너 4 + 사이드 2)
+POCKET_RADIUS = 0.0225                # 포켓 반경 (m) — 직경 45mm
+
+# Phase 2: 정밀 정지
+PRECISION_STOP_TOLERANCE = 0.01      # 허용 오차 1cm
+PRECISION_SPEED_RANGE = (0.5, 2.5)   # 속도 탐색 범위 (m/s) — 미니 테이블+마찰 대비
+PRECISION_SPEED_STEPS = 25           # 속도 탐색 해상도
+
+# Phase 2: 초기 배치 (y축 중심선 위 일렬)
+LINEUP_SPACING = 0.08                # 목적구 간 간격 (m)
+LINEUP_CUE_OFFSET = 0.12             # 큐볼-첫 목적구 간격 (m)
+
