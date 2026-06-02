@@ -515,19 +515,19 @@ def detect_balls() :
         #     black_mask
         # )
 
-        white_ball = detect_ball(
+        white_ball = detect_ball_fixed(
             white_mask,
             warped_color,
             (255, 255, 255)
         )
 
-        red_ball = detect_ball(
+        red_ball = detect_ball_fixed(
             red_mask,
             warped_color,
             (0, 0, 255)
         )
 
-        yellow_ball = detect_ball(
+        yellow_ball = detect_ball_fixed(
             yellow_mask,
             warped_color,
             (0, 255, 255)
