@@ -143,7 +143,7 @@ def run_position_calibration(indy, pb, env, ik):
         trajectory, phases = traj_planner.plan_strike(
             T_current=T_now, ball_pos=cue_pos,
             strike_direction=approach_dir,
-            strike_speed=0.1,  # 매우 느리게
+            strike_speed=1.0,  # 매우 느리게
             approach_dist=0.05,  # 5cm만 접근
             follow_dist=0.02,
             table_bounds=env.table_bounds
@@ -277,7 +277,7 @@ def run_position_calibration(indy, pb, env, ik):
         trajectory, phases = traj_planner.plan_strike(
             T_current=T_now, ball_pos=cue_pos,
             strike_direction=approach_dir,
-            strike_speed=0.1,  # 매우 느리게
+            strike_speed=1.0,  # 매우 느리게
             approach_dist=0.05,  # 5cm만 접근
             follow_dist=0.02,
             table_bounds=env.table_bounds
