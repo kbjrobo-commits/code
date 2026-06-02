@@ -140,6 +140,7 @@ def run_position_calibration(indy, pb, env, ik):
 
         # 간단한 접근: 공 바로 위에서 접근
         approach_dir = np.array([1.0, 0.0, 0.0])  # +x 방향
+        strike_angle_deg = 0.0  # +x 타격 (로봇 베이스 좌표계 기준)
         trajectory, phases = traj_planner.plan_strike(
             T_current=T_now, ball_pos=cue_pos,
             strike_direction=approach_dir,
@@ -172,7 +173,8 @@ def run_position_calibration(indy, pb, env, ik):
             print("  [REAL] 실제 로봇 재생...")
             q_follow_deg = np.degrees(q_follow)
             print("  실제 로봇 접근 중...")
-            _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed = 1.0)
+            _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases,
+                                   speed=1.0, strike_angle_deg=strike_angle_deg)
 
         except Exception as e:
             print(f"  [ERROR] 실제 로봇 실행 실패: {e}")
@@ -274,6 +276,7 @@ def run_position_calibration(indy, pb, env, ik):
 
         # 간단한 접근: 공 바로 위에서 접근
         approach_dir = np.array([0.0, 1.0, 0.0])  # +y 방향
+        strike_angle_deg = 90.0  # +y 타격 (로봇 베이스 좌표계 기준)
         trajectory, phases = traj_planner.plan_strike(
             T_current=T_now, ball_pos=cue_pos,
             strike_direction=approach_dir,
@@ -306,7 +309,8 @@ def run_position_calibration(indy, pb, env, ik):
             print("  [REAL] 실제 로봇 재생...")
             q_follow_deg = np.degrees(q_follow)
             print("  실제 로봇 접근 중...")
-            _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed = 1.0)
+            _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases,
+                                   speed=1.0, strike_angle_deg=strike_angle_deg)
 
         except Exception as e:
             print(f"  [ERROR] 실제 로봇 실행 실패: {e}")
@@ -562,7 +566,8 @@ def run_physics_calibration(indy, pb, env, ik, num_trials=5):
         q_follow_deg = np.degrees(q_follow)
         try:
             _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg,
-                                    phases, speed)
+                                    phases, speed,
+                                    strike_angle_deg=angle_deg)
         except Exception as e:
             print(f"  [ERROR] 실제 로봇 실행 실패: {e}")
             try:
@@ -702,7 +707,7 @@ def estimate_rolling_friction(v0, d_meas, lo=0.001, hi=0.05, iters=18):
 
 
 def run_friction_calibration(indy, pb, env, ik, strike_speed=0.4,
-                             strike_angle_deg=90.0, num_trials=3):
+                             strike_angle_deg=45.0, num_trials=3):
     """마찰 계수 보정 루프.
 
     절차:
@@ -795,7 +800,8 @@ def run_friction_calibration(indy, pb, env, ik, strike_speed=0.4,
         q_follow_deg = np.degrees(q_follow)
         try:
             _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg,
-                                    phases, strike_speed)
+                                    phases, strike_speed,
+                                    strike_angle_deg=strike_angle_deg)
         except Exception as e:
             print(f"  [ERROR] 실제 로봇 실행 실패: {e}")
             try:
@@ -863,7 +869,8 @@ def run_friction_calibration(indy, pb, env, ik, strike_speed=0.4,
     return mu_mean
 
 
-def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
+def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed,
+                           strike_angle_deg=None):
     """실제 로봇에서 접근→타격 재생.
 
     Phase 1 (Approach):  waypoint별 MoveJ
@@ -871,6 +878,11 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
     --- [Enter] 대기 (movej↔movel 분리) ---
     Phase 2 (Strike):    MoveL 직선 타격 (acc=600), 실패 시 movej fallback
     Phase 3 (Home):      MoveJ 홈 복귀
+
+    Args:
+        strike_angle_deg: MoveL 타격 방향 (로봇 베이스 좌표계 XY 평면, +x 기준 반시계 deg).
+            None이면 기존처럼 시뮬 FK(q_ready→q_follow) 변위 방향을 그대로 사용한다.
+            값을 주면 스트로크 길이는 FK에서 가져오되, 수평 진행 방향만 이 각도로 덮어쓴다.
     """
     approach_start = phases['approach'][0]
     approach_end = phases['approach'][1]
@@ -907,6 +919,20 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
     T_ready = pin.FK(np.radians(q_ready))
     T_follow = pin.FK(np.radians(q_follow_deg))
     delta_mm = (T_follow[:3, 3] - T_ready[:3, 3]) * 1000.0
+
+    # strike_angle_deg가 주어지면 스트로크 진행 방향(XY)을 해당 각도로 덮어쓴다.
+    # (수평 이동량과 z 변위는 FK 값을 유지 → 스트로크 길이는 그대로, 방향만 보정)
+    if strike_angle_deg is not None:
+        horiz_mag = float(np.linalg.norm(delta_mm[:2]))
+        ang = np.radians(strike_angle_deg)
+        delta_mm = np.array([
+            horiz_mag * np.cos(ang),
+            horiz_mag * np.sin(ang),
+            delta_mm[2],
+        ])
+        print(f"  [STRIKE DIR] 각도 {strike_angle_deg:.1f}° 적용 "
+              f"(수평 {horiz_mag:.1f}mm)")
+
     dist_mm = float(np.linalg.norm(delta_mm))
 
     print(f"\n  {'='*56}")
@@ -934,7 +960,7 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
         _wait_indy(indy, pb=pb)
     else:
         indy.movel([float(x) for x in p_target],
-                    vel_ratio=100, acc_ratio=900)
+                    vel_ratio=100, acc_ratio=600)
         # movel 대기 (짧은 모션 놓치지 않도록)
         time.sleep(0.2)
         t0 = time.time()
