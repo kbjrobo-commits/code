@@ -12,6 +12,9 @@ Phase 2: 물리 캘리브레이션 — 마찰/반발/속도전달비 최적화
   # Phase 2만 (물리 최적화, 좌표가 맞는 상태에서)
   python calibration_loop.py --phase physics --num-trials 5
 
+  # Phase 3만 (마찰 계수 보정 — 큐볼 구름거리 기반)
+  python calibration_loop.py --phase friction --num-trials 3 --strike-speed 0.4 --strike-angle 90
+
   # 전체 (좌표 → 물리 순서)
   python calibration_loop.py --phase all --num-trials 5
 
@@ -21,6 +24,7 @@ Phase 2: 물리 캘리브레이션 — 마찰/반발/속도전달비 최적화
 원리:
   Phase 1: 카메라로 공 검출 → 로봇이 공 위치로 이동 → 실제 접촉 여부로 좌표 오프셋 보정
   Phase 2: 로봇이 자동으로 간단한 타격 수행 → 카메라로 전/후 관측 → Nelder-Mead 최적화
+  Phase 3: 흰 공 위치 검출 → 타격 → 이동 후 위치 검출 → 예측/실측 구름거리 비교 → rolling_friction 역산
 """
 import numpy as np
 import pybullet as p
@@ -624,6 +628,247 @@ def run_physics_calibration(indy, pb, env, ik, num_trials=5):
     return optimal
 
 
+# ============================================================
+# Phase 3: 마찰 계수 보정 (단일 큐볼 구름 거리 기반)
+# ============================================================
+def _predict_cue_roll_distance(v0, rolling_friction=None, lateral_friction=None,
+                               ball_rest=None, max_steps=3000):
+    """헤드리스 시뮬: 큐볼 1개를 v0(m/s)로 굴려 정지까지 직선 이동 거리(m) 반환.
+
+    쿠션이 없는 넓은 평면에서 측정하므로 '자유 구름 거리'에 해당한다.
+    rolling_friction이 클수록 거리가 짧아진다 (단조 감소).
+    """
+    rf = MAZE_BALL_ROLLING_FRICTION if rolling_friction is None else rolling_friction
+    lf = MAZE_BALL_FRICTION if lateral_friction is None else lateral_friction
+    br = MAZE_BALL_RESTITUTION if ball_rest is None else ball_rest
+
+    sim_id = p.connect(p.DIRECT)
+    p.setAdditionalSearchPath(pybullet_data.getDataPath(), physicsClientId=sim_id)
+    p.setGravity(0, 0, -9.8, physicsClientId=sim_id)
+    p.setTimeStep(1 / 240, physicsClientId=sim_id)
+
+    TH = MAZE_TABLE_HEIGHT
+    H = MAZE_TABLE_SURFACE_HEIGHT
+    ball_h = H + TH / 2 + MAZE_BALL_RADIUS + 0.001
+
+    # 쿠션 없는 넓은 평면 (자유 구름 거리 측정용)
+    col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[5.0, 5.0, TH / 2],
+                                 physicsClientId=sim_id)
+    tid = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=col,
+                            basePosition=[0, 0, H], physicsClientId=sim_id)
+    p.changeDynamics(tid, -1, lateralFriction=lf, restitution=0.5,
+                     physicsClientId=sim_id)
+
+    c = p.createCollisionShape(p.GEOM_SPHERE, radius=MAZE_BALL_RADIUS,
+                               physicsClientId=sim_id)
+    bid = p.createMultiBody(baseMass=MAZE_BALL_MASS, baseCollisionShapeIndex=c,
+                            basePosition=[0, 0, ball_h], physicsClientId=sim_id)
+    p.changeDynamics(bid, -1, lateralFriction=lf, restitution=br,
+                     rollingFriction=rf, spinningFriction=0.02,
+                     physicsClientId=sim_id)
+
+    for _ in range(50):
+        p.stepSimulation(physicsClientId=sim_id)
+    start = np.array(p.getBasePositionAndOrientation(bid, physicsClientId=sim_id)[0][:2])
+
+    p.resetBaseVelocity(bid, linearVelocity=[v0, 0, 0], physicsClientId=sim_id)
+    for step in range(max_steps):
+        p.stepSimulation(physicsClientId=sim_id)
+        if step > 50 and step % 25 == 0:
+            if np.linalg.norm(p.getBaseVelocity(bid, physicsClientId=sim_id)[0][:2]) < 0.003:
+                break
+
+    final = np.array(p.getBasePositionAndOrientation(bid, physicsClientId=sim_id)[0][:2])
+    p.disconnect(sim_id)
+    return float(np.linalg.norm(final - start))
+
+
+def estimate_rolling_friction(v0, d_meas, lo=0.001, hi=0.05, iters=18):
+    """실측 구름거리 d_meas(m)에 맞는 rolling_friction을 이분탐색으로 역산.
+
+    예측 거리는 rolling_friction에 대해 단조 감소하므로 이분탐색이 성립한다.
+    """
+    d_lo = _predict_cue_roll_distance(v0, rolling_friction=lo)  # 가장 긴 거리
+    d_hi = _predict_cue_roll_distance(v0, rolling_friction=hi)  # 가장 짧은 거리
+
+    # 측정 거리가 탐색 범위를 벗어나면 경계값으로 포화
+    if d_meas >= d_lo:
+        return lo
+    if d_meas <= d_hi:
+        return hi
+
+    for _ in range(iters):
+        mid = 0.5 * (lo + hi)
+        d_mid = _predict_cue_roll_distance(v0, rolling_friction=mid)
+        if d_mid > d_meas:
+            lo = mid  # 거리가 길다 → 마찰 더 필요
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def run_friction_calibration(indy, pb, env, ik, strike_speed=0.4,
+                             strike_angle_deg=90.0, num_trials=3):
+    """마찰 계수 보정 루프.
+
+    절차:
+      1. [VISION] 카메라로 흰 공(큐볼) 위치 검출
+      2. [STRIKE] 로봇이 지정 속도로 큐볼을 한 방향으로 타격
+      3. [VISION] 공이 멈춘 뒤 큐볼 위치 재검출
+      4. [COMPARE] 현재 마찰로 예측한 구름거리 vs 실측 구름거리 비교
+         → 실측 거리에 맞는 rolling_friction을 역산하여 출력(print)
+
+    주의:
+      - 마찰 보정은 흰 공만 검출하는 detect_cue_ball() 모드를 사용한다.
+        (빨강/노랑 목적구 없이 흰 공 하나만 테이블에 둬도 동작)
+      - 큐볼이 쿠션에 부딪히지 않고 직선으로 굴러갈 수 있도록
+        테이블을 세팅한 뒤 실행할 것.
+    """
+    from project.real_env_to_pybullet import detect_cue_ball, wait_real_cue_ball_stop
+    from project.trajectory_planner import StrikeTrajectoryPlanner
+
+    traj_planner = StrikeTrajectoryPlanner()
+    offset = load_position_offset()
+
+    angle = np.radians(strike_angle_deg)
+    strike_dir_3d = np.array([np.cos(angle), np.sin(angle), 0.0])
+    v0 = strike_speed * BALL_SPEED_GAIN  # 예측 초기 큐볼 속도 (m/s)
+    d_pred = _predict_cue_roll_distance(v0, rolling_friction=MAZE_BALL_ROLLING_FRICTION)
+
+    print(f"\n{'='*60}")
+    print(f"  Phase 3: 마찰 계수 보정 ({num_trials}회 타격)")
+    print(f"  좌표 오프셋: x={offset['x']:.4f}m, y={offset['y']:.4f}m")
+    print(f"  타격 속도(tool): {strike_speed:.3f} m/s, 방향: {strike_angle_deg:.1f}°")
+    print(f"  예측 초기 큐볼 속도 v0 = {v0:.3f} m/s "
+          f"(BALL_SPEED_GAIN={BALL_SPEED_GAIN:.3f})")
+    print(f"  현재 rolling_friction = {MAZE_BALL_ROLLING_FRICTION:.4f} "
+          f"→ 예측 구름거리 = {d_pred*100:.1f} cm")
+    print(f"{'='*60}")
+
+    estimates = []
+    for trial_idx in range(num_trials):
+        print(f"\n{'='*40}")
+        print(f"  Trial {trial_idx+1}/{num_trials}")
+        print(f"{'='*40}")
+
+        # 1. [VISION] 카메라로 흰 공만 검출 (큐볼 1개 모드)
+        print("  [VISION] 카메라로 큐볼(흰 공) 위치 검출...")
+        try:
+            cue_start = detect_cue_ball()
+        except Exception as e:
+            print(f"  [ERROR] 큐볼 검출 실패: {e}")
+            continue
+        print(f"  큐볼 시작: [{cue_start[0]:.4f}, {cue_start[1]:.4f}]")
+
+        # 시뮬 환경 동기화 (시각화용 — 큐볼만 갱신, 목적구는 기본 위치)
+        if env.cue_ball_id is None:
+            env.setup(cue_pos=cue_start, num_obstacles=0)
+            env.disable_robot_env_collision(pb.my_robot.robotId)
+            env.disable_tool_env_collision()
+        else:
+            env.reset_balls(cue_pos=cue_start)
+
+        # 2. [STRIKE] 타격 궤적 생성
+        T_now = pb.my_robot.pinModel.FK(pb.my_robot.q)
+        q_now = pb.my_robot.q.copy()
+        ball_pos = np.array(cue_start)
+
+        trajectory, phases = traj_planner.plan_strike(
+            T_current=T_now, ball_pos=ball_pos,
+            strike_direction=strike_dir_3d,
+            strike_speed=strike_speed,
+            approach_dist=STRIKE_APPROACH_DIST,
+            follow_dist=STRIKE_FOLLOW_DIST,
+            table_bounds=env.table_bounds
+        )
+
+        q_traj = ik.solve_trajectory(q_now, trajectory)
+        q_traj_deg = np.degrees(np.array(q_traj).reshape(-1, 6))
+
+        # 시뮬 실행 (approach + strike)
+        print("  [SIM] 시뮬 실행...")
+        for i in range(phases['approach'][0], phases['approach'][1]):
+            pb.MoveRobot(q_traj[i], degree=False)
+            time.sleep(0.002)
+        time.sleep(0.3)
+        q_follow_idx = min(phases['follow'][1] - 1, len(q_traj) - 1)
+        q_follow = q_traj[q_follow_idx]
+        pb.MoveRobot(q_follow, degree=False)
+        time.sleep(0.5)
+
+        # 실제 로봇 재생
+        print("  [REAL] 실제 로봇 재생...")
+        q_follow_deg = np.degrees(q_follow)
+        try:
+            _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg,
+                                    phases, strike_speed)
+        except Exception as e:
+            print(f"  [ERROR] 실제 로봇 실행 실패: {e}")
+            try:
+                indy.recover()
+            except:
+                pass
+            _return_home(indy, pb)
+            continue
+
+        # 3. [VISION] 큐볼 정지 대기 후 최종 위치 검출 (흰 공만)
+        print("  [VISION] 큐볼 정지 대기 후 재검출...")
+        try:
+            cue_final = wait_real_cue_ball_stop(
+                interval=0.5, threshold_mm=3.0, max_wait=10.0)
+        except Exception as e:
+            print(f"  [ERROR] 최종 검출 실패: {e}")
+            _return_home(indy, pb)
+            continue
+        print(f"  큐볼 종료: [{cue_final[0]:.4f}, {cue_final[1]:.4f}]")
+
+        # 4. [COMPARE] 예측 vs 실제 → 마찰 계수 역산
+        d_meas = float(np.linalg.norm(
+            np.array(cue_final[:2]) - np.array(cue_start[:2])))
+
+        print(f"\n  {'-'*40}")
+        print(f"  [COMPARE] 예측 vs 실측")
+        print(f"    예측 구름거리 d_pred = {d_pred*100:.1f} cm "
+              f"(rolling_friction={MAZE_BALL_ROLLING_FRICTION:.4f})")
+        print(f"    실측 구름거리 d_meas = {d_meas*100:.1f} cm")
+
+        if d_meas < 0.01:
+            print(f"    ⚠️ 큐볼이 거의 안 움직임 ({d_meas*1000:.1f}mm) "
+                  f"— 헛침/좌표 불일치 의심. 이번 trial 제외.")
+            _return_home(indy, pb)
+            continue
+
+        mu_est = estimate_rolling_friction(v0, d_meas)
+        mu_eff = v0 ** 2 / (2 * 9.8 * d_meas)  # 균일 감속 가정 등가 마찰계수
+        err_pct = (d_pred - d_meas) / d_meas * 100.0
+
+        print(f"    거리 오차(예측-실측) = {err_pct:+.1f}%")
+        print(f"    >>> 역산 rolling_friction = {mu_est:.4f} "
+              f"(현재 {MAZE_BALL_ROLLING_FRICTION:.4f})")
+        print(f"    >>> 등가 마찰계수 μ_eff = v0²/(2·g·d) = {mu_eff:.4f}")
+        print(f"  {'-'*40}")
+
+        estimates.append(mu_est)
+        _return_home(indy, pb)
+        print(f"  Trial {trial_idx+1} 완료")
+
+    # 요약
+    print(f"\n{'='*60}")
+    if estimates:
+        mu_mean = float(np.mean(estimates))
+        mu_std = float(np.std(estimates))
+        print(f"  마찰 계수 보정 요약 ({len(estimates)}개 유효 trial)")
+        print(f"    개별 추정값: {[round(m, 4) for m in estimates]}")
+        print(f"    >>> 평균 rolling_friction = {mu_mean:.4f} ± {mu_std:.4f}")
+        print(f"    (현재 설정값 {MAZE_BALL_ROLLING_FRICTION:.4f} → "
+              f"권장 {mu_mean:.4f})")
+    else:
+        print(f"  [ERROR] 유효한 trial이 없습니다. 세팅을 확인하세요.")
+        mu_mean = None
+    print(f"{'='*60}")
+    return mu_mean
+
+
 def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
     """실제 로봇에서 접근→타격 재생.
 
@@ -866,9 +1111,13 @@ def load_calibration(path=None):
 # ============================================================
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='완전 자동 물리 캘리브레이션')
-    parser.add_argument('--phase', choices=['position', 'physics', 'all'],
+    parser.add_argument('--phase', choices=['position', 'physics', 'friction', 'all'],
                         default='all', help='실행할 캘리브레이션 단계')
     parser.add_argument('--num-trials', type=int, default=5)
+    parser.add_argument('--strike-speed', type=float, default=0.4,
+                        help='마찰 보정 시 타격 속도 (m/s)')
+    parser.add_argument('--strike-angle', type=float, default=90.0,
+                        help='마찰 보정 시 타격 방향 (deg, +x기준 반시계)')
     parser.add_argument('--robot-ip', type=str, default='192.168.0.13')
     parser.add_argument('--test', action='store_true',
                         help='시뮬 테스트 (실제 로봇 없이)')
@@ -876,6 +1125,19 @@ if __name__ == '__main__':
                         help='저장된 데이터로 최적화만')
     parser.add_argument('--data', type=str, default='calibration_trials.npz')
     args = parser.parse_args()
+
+    if args.test and args.phase == 'friction':
+        # 마찰 예측/역산 테스트 (로봇 없이)
+        print("  테스트 모드: 마찰 예측 시뮬 + 역산 확인")
+        v0 = args.strike_speed * BALL_SPEED_GAIN
+        d_pred = _predict_cue_roll_distance(v0, rolling_friction=MAZE_BALL_ROLLING_FRICTION)
+        print(f"  v0 = {v0:.3f} m/s (tool {args.strike_speed:.3f} m/s × gain {BALL_SPEED_GAIN:.3f})")
+        print(f"  현재 rolling_friction={MAZE_BALL_ROLLING_FRICTION:.4f} → 예측 구름거리 {d_pred*100:.1f} cm")
+        # 가상의 실측 거리로 역산이 잘 되는지 확인 (예측거리의 70%로 가정)
+        d_fake = d_pred * 0.7
+        mu_est = estimate_rolling_friction(v0, d_fake)
+        print(f"  가상 실측거리 {d_fake*100:.1f} cm → 역산 rolling_friction={mu_est:.4f}")
+        sys.exit(0)
 
     if args.test:
         # 시뮬 테스트
@@ -942,6 +1204,12 @@ if __name__ == '__main__':
 
     if args.phase in ('physics', 'all'):
         run_physics_calibration(indy, pb, env, ik, num_trials=args.num_trials)
+
+    if args.phase == 'friction':
+        run_friction_calibration(indy, pb, env, ik,
+                                 strike_speed=args.strike_speed,
+                                 strike_angle_deg=args.strike_angle,
+                                 num_trials=args.num_trials)
 
     pb.disconnect()
     print("\n  캘리브레이션 완료!")
