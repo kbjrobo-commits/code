@@ -136,10 +136,10 @@ COLOR_OBSTACLE = [0.6, 0.2, 0.2, 1]
 # ============================================================
 # 미로 환경 파라미터
 # ============================================================
-MAZE_TABLE_LENGTH = 0.31           # 테이블 길이 X (m)
-MAZE_TABLE_WIDTH = 0.63           # 테이블 폭 Y (m)
+MAZE_TABLE_LENGTH = 0.305          # 테이블 길이 X (m)
+MAZE_TABLE_WIDTH = 0.635           # 테이블 폭 Y (m)
 MAZE_TABLE_HEIGHT = 0.02           # 테이블 두께 (m)
-MAZE_TABLE_SURFACE_HEIGHT = 0.037    # 테이블 바닥면 높이 (m)
+MAZE_TABLE_SURFACE_HEIGHT = 0.031    # 테이블 바닥면 높이 (m)
 MAZE_TABLE_CENTER_X = 0.485        # 테이블 중심 X (원래 위치 복원)
 MAZE_TABLE_CENTER_Y = 0.165         # 테이블 중심 Y (원래 위치 복원)
 MAZE_GRID_SPACING = 0.05           # 자석 그리드 간격 (m)
