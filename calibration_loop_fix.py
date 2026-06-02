@@ -111,9 +111,8 @@ def run_position_calibration(indy, pb, env, ik):
     print(f"  Phase 1: 좌표 캘리브레이션")
     print(f"  현재 오프셋: x={offset['x']:.4f}m, y={offset['y']:.4f}m")
     print(f"{'='*60}")
-    offset_size = 0.003
 
-    while abs(offset_size) > 1e-6:
+    while True:
         # 1. 카메라로 공 검출
         print("  카메라로 공 검출 중...")
         try:
@@ -173,7 +172,7 @@ def run_position_calibration(indy, pb, env, ik):
             print("  [REAL] 실제 로봇 재생...")
             q_follow_deg = np.degrees(q_follow)
             print("  실제 로봇 접근 중...")
-            _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed = 0.1)
+            _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed = 1.0)
 
         except Exception as e:
             print(f"  [ERROR] 실제 로봇 실행 실패: {e}")
@@ -185,36 +184,34 @@ def run_position_calibration(indy, pb, env, ik):
             continue
 
         # 5. 공 움직임 입력
-        print("\n공 진행 방향을 입력하세요:")
-        print("  [l] 왼쪽으로 감")
-        print("  [r] 오른쪽으로 감")
-        print("  [g] 직진 (good)")
+        print("\n공의 중심 기준 타격 위치를 입력하세요:")
+        print("  [l] 왼쪽")
+        print("  [r] 오른쪽")
+        print("  [g] 중앙 (good)")
         print("  [m] 공을 못 맞춤")
 
         cmd = input("입력 > ").strip().lower()
 
         if cmd == 'l':
             """
-            공이 왼쪽으로 갔음 (+y)
-            공의 오른쪽을 침
-            공이 더 오른쪽으로 가야함
+            공의 왼쪽을 침
+            타격지점이 더 오른쪽으로 가야함
             y_offset 감소
             """
-            
+            offset_size = input("offset 크기 입력 > ").strip()
+            offset_size = float(offset_size)
             offset['y'] -= offset_size
-            offset_size = max(0.0, offset_size - 0.001)
             print(f"  new y offset = {offset['y']:.4f}")
         
         elif cmd == 'r':
             """
-            공이 오른쪽으로 갔음 (-y)
-            공의 왼쪽을 침
-            공이 더 왼쪽으로 가야함
+            공의 오른쪽을 침
+            타격지점이 더 왼쪽으로 가야함
             y_offset 증가
             """
-            
+            offset_size = input("offset 크기 입력 > ").strip()
+            offset_size = float(offset_size)
             offset['y'] += offset_size
-            offset_size = max(0.0, offset_size - 0.001)
             print(f"  new y offset = {offset['y']:.4f}")
 
         elif cmd == 'g':
@@ -231,16 +228,16 @@ def run_position_calibration(indy, pb, env, ik):
 
             if cmd2 == 'l':
                 """
-                툴팁이 왼쪽으로 지나갔기 때문에 공을 +y로 이동해야함
+                툴팁이 왼쪽으로 지나갔기 때문에 공을 -y로 이동해야함
                 """
-                offset['y'] += 0.005
+                offset['y'] -= 0.005
                 print(f"  new y offset = {offset['y']:.4f}")
             
             elif cmd2 == 'r':
                 """
-                툴팁이 오른쪽으로 지나갔기 때문에 공을 -y로 이동해야함
+                툴팁이 오른쪽으로 지나갔기 때문에 공을 +y로 이동해야함
                 """
-                offset['y'] -= 0.005
+                offset['y'] += 0.005
                 print(f"  new y offset = {offset['y']:.4f}")
 
             else:
@@ -252,8 +249,7 @@ def run_position_calibration(indy, pb, env, ik):
         save_position_offset(offset)
         _return_home(indy, pb)
 
-    offset_size = 0.003
-    while abs(offset_size) > 1e-6:
+    while True:
         # 1. 카메라로 공 검출
         print("  카메라로 공 검출 중...")
         try:
@@ -310,7 +306,7 @@ def run_position_calibration(indy, pb, env, ik):
             print("  [REAL] 실제 로봇 재생...")
             q_follow_deg = np.degrees(q_follow)
             print("  실제 로봇 접근 중...")
-            _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed = 0.1)
+            _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed = 1.0)
 
         except Exception as e:
             print(f"  [ERROR] 실제 로봇 실행 실패: {e}")
@@ -322,36 +318,34 @@ def run_position_calibration(indy, pb, env, ik):
             continue
 
         # 5. 공 움직임 입력
-        print("\n공 진행 방향을 입력하세요:")
-        print("  [l] 왼쪽으로 감")
-        print("  [r] 오른쪽으로 감")
-        print("  [g] 직진 (good)")
+        print("\n공의 중심 기준 타격 위치를 입력하세요:")
+        print("  [l] 왼쪽")
+        print("  [r] 오른쪽")
+        print("  [g] 중앙 (good)")
         print("  [m] 공을 못 맞춤")
 
         cmd = input("입력 > ").strip().lower()
 
         if cmd == 'l':
             """
-            공이 왼쪽으로 갔음 (-x)
-            공의 오른쪽을 침
-            공이 더 오른쪽으로 가야함
+            공의 왼쪽을 침
+            타격지점이 더 오른쪽으로 가야함
             x_offset 증가
             """
-            
+            offset_size = input("offset 크기 입력 > ").strip()
+            offset_size = float(offset_size)
             offset['x'] += offset_size
-            offset_size = max(0.0, offset_size - 0.001)
             print(f"  new x offset = {offset['x']:.4f}")
         
         elif cmd == 'r':
             """
-            공이 오른쪽으로 갔음 (+x)
-            공의 왼쪽을 침
-            공이 더 왼쪽으로 가야함
+            공의 오른쪽을 침
+            타격지점이 더 왼쪽으로 가야함
             x_offset 감소
             """
-            
+            offset_size = input("offset 크기 입력 > ").strip()
+            offset_size = float(offset_size)
             offset['x'] -= offset_size
-            offset_size = max(0.0, offset_size - 0.001)
             print(f"  new x offset = {offset['x']:.4f}")
 
         elif cmd == 'g':
@@ -368,16 +362,16 @@ def run_position_calibration(indy, pb, env, ik):
 
             if cmd2 == 'l':
                 """
-                툴팁이 왼쪽으로 지나갔기 때문에 공을 -x로 이동해야함
+                툴팁이 왼쪽으로 지나갔기 때문에 공을 +x로 이동해야함
                 """
-                offset['x'] -= 0.005
+                offset['x'] += 0.005
                 print(f"  new x offset = {offset['x']:.4f}")
             
             elif cmd2 == 'r':
                 """
-                툴팁이 오른쪽으로 지나갔기 때문에 공을 +x로 이동해야함
+                툴팁이 오른쪽으로 지나갔기 때문에 공을 -x로 이동해야함
                 """
-                offset['x'] += 0.005
+                offset['x'] -= 0.005
                 print(f"  new x offset = {offset['x']:.4f}")
 
             else:
