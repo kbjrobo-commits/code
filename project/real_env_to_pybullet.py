@@ -225,7 +225,7 @@ def detect_balls() :
 
             # 너무 작은 건 제거
             # 숫자 흰색 원 제거용
-            if area < 300:
+            if area < 100:
                 continue
 
             perimeter = cv2.arcLength(cnt, True)
@@ -311,7 +311,7 @@ def detect_balls() :
             hull = cv2.convexHull(cnt)
             area = cv2.contourArea(hull)
 
-            if area < 300:
+            if area < 100:
                 continue
 
             perimeter = cv2.arcLength(hull, True)
