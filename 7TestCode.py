@@ -198,8 +198,9 @@ print(f"실제 로봇 EE: {p_real[:3]} mm")
 print(f"오차: {np.linalg.norm(T_pin[:3,3]*1000 - np.array(p_real[:3])):.1f} mm")
 
 # %% Step 7: 데모 선택 + 라운드 수
-DEMO_TYPE = 'maze'   # 'minigolf', 'billiards', 또는 'maze' (3-cushion)
-NUM_ROUNDS = 3
+# 'minigolf', 'billiards', 'maze' (3-cushion), 'pocket_phase1', 'pocket_phase2'
+DEMO_TYPE = 'pocket_phase2'
+NUM_ROUNDS = 1  # pocket_phase1=3(공 3개), pocket_phase2=1(트릭샷 1회)
 
 print(f"데모: {DEMO_TYPE}, 라운드: {NUM_ROUNDS}")
 
@@ -241,6 +242,57 @@ elif DEMO_TYPE == 'maze':
     tool_offset = MAZE_BALL_RADIUS  # 큐팁이 공 표면에 닿도록 (ㄴ자 오프셋은 planner 내부 처리)
     shot_planner = CushionShotPlanner(table_bounds=env.table_bounds)
     perception = SimPerception(env)
+elif DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
+    from project.environment.maze_env import MazeEnvironment
+    from project.physics.pocket_planner import PocketShotPlanner
+    from project.real_env_to_pybullet import detect_balls
+    env = MazeEnvironment(pb.ClientId)
+    CY, W = MAZE_TABLE_CENTER_Y, MAZE_TABLE_WIDTH
+    H, TH = MAZE_TABLE_SURFACE_HEIGHT, MAZE_TABLE_HEIGHT
+    ball_h = H + TH/2 + MAZE_BALL_RADIUS + 0.001
+
+    if DEMO_TYPE == 'pocket_phase2':
+        # Phase 2: 비전으로 흰 큐볼 + trick ball 2개 위치 받기
+        # detect_balls()는 (white, red, yellow) 반환
+        print("  [VISION] 공 위치 감지 중... (큐볼=흰, trick1=노랑, trick2=빨강)")
+        cue_pos, red_pos, yellow_pos = detect_balls()
+        print(f"    큐볼: {cue_pos[:2]}")
+        print(f"    Trick1(노랑): {yellow_pos[:2]}")
+        print(f"    Trick2(빨강): {red_pos[:2]}")
+
+        # 초기 배치: 비전으로 받은 위치 사용
+        env.setup(
+            cue_pos=cue_pos,
+            target_pos=yellow_pos,  # trick ball 1 = 노란공
+            ball2_pos=red_pos,      # trick ball 2 = 빨간공
+            num_obstacles=0,
+            setup_pockets=True,
+        )
+        NUM_ROUNDS = 1
+    else:
+        # Phase 1: 비전으로 모든 공 위치 받기
+        print("  [VISION] 공 위치 감지 중...")
+        cue_pos, red_pos, yellow_pos = detect_balls()
+        print(f"    큐볼: {cue_pos[:2]}")
+        print(f"    목적구1(노랑): {yellow_pos[:2]}")
+        print(f"    목적구2(빨강): {red_pos[:2]}")
+
+        env.setup(
+            cue_pos=cue_pos,
+            target_pos=yellow_pos,
+            ball2_pos=red_pos,
+            ball3_pos=[MAZE_TABLE_CENTER_X, CY + W/6, ball_h],  # 3번째 공: 수동 배치 또는 비전
+            num_obstacles=0,
+            setup_pockets=True,
+        )
+        NUM_ROUNDS = 3
+
+    env.disable_robot_env_collision(robot_id)
+    env.attach_compact_tool(robot_id, ee_link)
+    env.disable_tool_env_collision()
+    tool_offset = TOOL_HEAD_LENGTH + MAZE_BALL_RADIUS
+    shot_planner = PocketShotPlanner(table_bounds=env.table_bounds)
+    perception = None
 else:  # billiards
     from project.environment.billiards_env import BilliardsEnvironment
     from project.physics.shot_planner import BilliardsShotPlanner
@@ -268,6 +320,61 @@ print(f"환경 세팅 완료 (도구 안정화 3초 대기)")
 # %% Step 9: *** 시뮬에서 전체 라운드 실행 (GUI로 관찰) ***
 traj_planner = StrikeTrajectoryPlanner(approach_duration=3.0, dt=0.002)
 saved_trajectories = []
+
+if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
+    # ========================================================
+    # Pocket 데모: AutonomousStateMachine 사용
+    # state_machine이 PLAN→IK→STRIKE를 내부에서 처리
+    # ========================================================
+    from project.robot_controller import RobotController
+    from project.state_machine import AutonomousStateMachine
+
+    # RobotController 래퍼 생성 (이미 pb 연결된 상태)
+    rc = RobotController.__new__(RobotController)
+    rc.mode = 'sim'
+    rc.pb = pb
+    rc.ik = ik
+    rc.traj_planner = traj_planner
+    rc._boosted = True
+    rc.env = env
+
+    rc.boost_pd_gains(kp=5000, kd=200)
+    time.sleep(3)
+
+    sm = AutonomousStateMachine(
+        controller=rc,
+        environment=env,
+        shot_planner=shot_planner,
+        traj_planner=traj_planner,
+        demo_type=DEMO_TYPE,
+        tool_offset=tool_offset,
+    )
+
+    print(f"\n  [POCKET] State Machine 실행...")
+    success = sm.run(max_attempts=3)
+    print(f"\n  [POCKET] Result: {'SUCCESS' if success else 'COMPLETED'}")
+
+    # 저장된 궤적 추출 (state_machine에서 마지막 실행 궤적)
+    if hasattr(sm, 'last_executed_q_trajectory') and sm.last_executed_q_trajectory is not None:
+        q_traj_full = sm.last_executed_q_trajectory
+        q_traj_deg = np.degrees(np.array(q_traj_full).reshape(-1, 6))
+        phases_saved = sm.last_executed_phases
+        # follow 위치: approach 끝 + follow_dist
+        if phases_saved and 'approach' in phases_saved:
+            approach_end_idx = phases_saved['approach'][1] - 1
+            q_follow_deg = q_traj_deg[-1]  # 마지막 점 = follow through
+            saved_trajectories.append((q_traj_deg, q_follow_deg, phases_saved))
+            print(f"  [POCKET] 궤적 저장 완료: {len(q_traj_deg)} points")
+        else:
+            print(f"  [POCKET] phases 정보 없음 — 궤적 저장 건너뜀")
+    else:
+        print(f"  [POCKET] 궤적 없음 — 실행 안 됐거나 실패")
+
+    pb.MoveRobot(HOME_Q_DEG, degree=True)
+    time.sleep(2)
+
+if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
+    NUM_ROUNDS = 0  # pocket은 state_machine으로 이미 처리됨
 
 for rnd in range(1, NUM_ROUNDS + 1):
     print(f"\n{'='*50}")
@@ -608,13 +715,28 @@ for rnd_idx, (q_traj_d, q_follow_d, phs) in enumerate(saved_trajectories):
         time.sleep(1)
 
     # 카메라로 공 정지 확인 + 최종 위치 관측
-    if DEMO_TYPE == 'maze':
+    if DEMO_TYPE in ('maze', 'pocket_phase1', 'pocket_phase2'):
         try:
-            from project.real_env_to_pybullet import wait_real_balls_stop
-            print(f"  [OBSERVE] 카메라로 공 정지 대기...")
-            final = wait_real_balls_stop(interval=0.5, threshold_mm=3.0, max_wait=10.0)
-            cue_f, tgt1_f, tgt2_f = final
+            from project.real_env_to_pybullet import detect_balls
+            print(f"  [OBSERVE] 카메라로 최종 위치 감지 중...")
+            time.sleep(3)  # 공 정지 대기
+            cue_f, tgt1_f, tgt2_f = detect_balls()
             print(f"  최종 위치: cue={cue_f[:2]}, t1={tgt1_f[:2]}, t2={tgt2_f[:2]}")
+
+            if DEMO_TYPE == 'pocket_phase2':
+                # 트릭샷 결과: trick balls와 O 목표 위치 거리
+                o_cx, o_cy = MAZE_TABLE_CENTER_X, MAZE_TABLE_CENTER_Y - 0.12
+                rx, ry = 0.035, 0.045
+                # 목표: 150° / 210° 위치
+                g1 = np.array([o_cx + rx * np.cos(np.radians(150)),
+                               o_cy + ry * np.sin(np.radians(150))])
+                g2 = np.array([o_cx + rx * np.cos(np.radians(210)),
+                               o_cy + ry * np.sin(np.radians(210))])
+                # 두 가지 매칭
+                da = np.linalg.norm(tgt1_f[:2] - g1) + np.linalg.norm(tgt2_f[:2] - g2)
+                db = np.linalg.norm(tgt1_f[:2] - g2) + np.linalg.norm(tgt2_f[:2] - g1)
+                total = min(da, db)
+                print(f"  [TRICK] 목표 합산 거리: {total*100:.1f}cm")
         except Exception as e:
             print(f"  [OBSERVE] 카메라 관측 실패: {e}")
 
