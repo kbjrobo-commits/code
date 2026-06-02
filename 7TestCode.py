@@ -550,27 +550,33 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 _sim_execute_and_real_replay(traj_data, f"{ball_names[ball_idx]} #{attempt}")
 
                 # 4) 비전으로 결과 확인
+                # detect_balls()는 3공 모두 감지될 때까지 무한 루프이므로,
+                # 포켓된 공이 있으면 타임아웃됨 → 포켓 성공으로 판단
                 print(f"  [OBSERVE] 결과 확인 중...")
                 time.sleep(3)
-                try:
-                    cue_f, red_f, yellow_f = detect_balls()
-                    print(f"    큐: {cue_f[:2]}, 노: {yellow_f[:2]}, 빨: {red_f[:2]}")
 
-                    # 공이 테이블 밖이면 포켓된 것으로 판단
-                    tb = env.table_bounds
-                    check_pos = yellow_f if ball_idx == 0 else red_f
-                    in_table = (tb['x_min'] - 0.02 < check_pos[0] < tb['x_max'] + 0.02 and
-                                tb['y_min'] - 0.02 < check_pos[1] < tb['y_max'] + 0.02)
+                import threading
+                detect_result = [None]  # [cue, red, yellow] or None
 
-                    if not in_table:
-                        print(f"  ★ {ball_names[ball_idx]} 포켓 성공!")
-                        balls_pocketed[ball_idx] = True
-                        break
-                    else:
-                        print(f"  ✗ {ball_names[ball_idx]} 아직 테이블 위 — 재시도")
-                except Exception as e:
-                    print(f"  [OBSERVE] 카메라 실패: {e}")
+                def _detect_with_timeout():
+                    try:
+                        detect_result[0] = detect_balls()
+                    except:
+                        pass
+
+                t = threading.Thread(target=_detect_with_timeout, daemon=True)
+                t.start()
+                t.join(timeout=10.0)  # 10초 타임아웃
+
+                if detect_result[0] is None or not t.is_alive() and detect_result[0] is None:
+                    # 타임아웃 = 공이 안 보임 = 포켓 성공
+                    print(f"  ★ {ball_names[ball_idx]} 포켓 성공! (카메라에서 미감지)")
+                    balls_pocketed[ball_idx] = True
                     break
+                else:
+                    cue_f, red_f, yellow_f = detect_result[0]
+                    print(f"    큐: {cue_f[:2]}, 노: {yellow_f[:2]}, 빨: {red_f[:2]}")
+                    print(f"  ✗ {ball_names[ball_idx]} 아직 테이블 위 — 재시도")
 
                 movej_both(HOME_Q_DEG, wait=True)
                 time.sleep(1)
