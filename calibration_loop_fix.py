@@ -715,6 +715,7 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
     print(f"  [REAL] Strike 완료!")
 
     # ======== Phase 3: Home ========
+    input("\n  >>> [Enter] → Home 복귀\n")
     print(f"  [REAL] Phase 3: Home")
     indy.movej(list(HOME_Q_DEG), vel_ratio=30, acc_ratio=100)
     _wait_indy(indy, pb=pb)
