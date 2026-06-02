@@ -82,13 +82,14 @@ def SE3_to_p6(T):
 
 
 def replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, label="", strike_speed=1.0):
-    """전구간 MoveJ -- 시뮬 IK 관절각도를 그대로 전송
+    """실제 로봇 재생: Approach/Align=MoveJ, Strike=MoveL 직선.
 
-    Euler 변환 없음, FK 오프셋 없음, 좌표계 불일치 없음.
     Phase 1 (Approach):  waypoint별 MoveJ
     Phase 1.5 (Align):   Ready 위치 정밀 정렬 MoveJ
-    Phase 2 (Strike):    Follow-through MoveJ
-    Phase 3 (Retract):   Home MoveJ
+    --- [Enter] 대기 (movej↔movel 분리) ---
+    Phase 2 (Strike):    MoveL 직선 타격 (acc=600), 실패 시 movej fallback
+    --- [Enter] 대기 (movel↔movej 분리) ---
+    Phase 3 (Home):      MoveJ 홈 복귀
     """
     approach_start = phases['approach'][0]
     approach_end = phases['approach'][1]
@@ -124,15 +125,61 @@ def replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, label="", strike
     print(f"    Ready eul: [{p_now[3]:.1f}, {p_now[4]:.1f}, {p_now[5]:.1f}] deg")
     print(f"  [{label}] Ready 정렬 완료")
 
-    # ======== Phase 2: Strike (MoveJ to follow-through) ========
-    print(f"  [{label}] Phase 2: MoveJ Strike!")
-    indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=300)
-    wait_indy()
-    p_after = indy.get_control_data()['p']
-    print(f"    After strike: [{p_after[0]:.1f}, {p_after[1]:.1f}, {p_after[2]:.1f}] mm")
+    # ======== Phase 2: Strike (MoveL 직선) ========
+    p_ready = indy.get_control_data()['p']  # [x,y,z,rx,ry,rz] mm/deg
+    print(f"    Ready TCP: [{p_ready[0]:.1f}, {p_ready[1]:.1f}, {p_ready[2]:.1f}] mm")
+
+    # 시뮬 FK: ready→follow 변위 계산
+    pin = pb.my_robot.pinModel
+    T_ready = pin.FK(np.radians(q_ready))
+    T_follow = pin.FK(np.radians(q_follow_deg))
+    delta_mm = (T_follow[:3, 3] - T_ready[:3, 3]) * 1000.0
+    dist_mm = float(np.linalg.norm(delta_mm))
+
+    print(f"\n  {'='*56}")
+    print(f"  [{label}] APPROACH 완료 — 로봇 정지")
+    print(f"  delta: [{delta_mm[0]:.1f}, {delta_mm[1]:.1f}, {delta_mm[2]:.1f}] mm ({dist_mm:.1f}mm)")
+    print(f"  >>> [Enter] = START → MoveL 직선 STRIKE")
+    print(f"  {'='*56}")
+    input()
+
+    # movel 목표 = 현재 TCP + delta (자세 유지)
+    p_target = list(p_ready)
+    p_target[0] += delta_mm[0]
+    p_target[1] += delta_mm[1]
+    p_target[2] += delta_mm[2]
+
+    print(f"  [{label}] Phase 2: MoveL Strike!")
+    print(f"    target: [{p_target[0]:.1f}, {p_target[1]:.1f}, {p_target[2]:.1f}] mm")
+
+    if dist_mm < 3.0:
+        print(f"    [WARN] 거리 {dist_mm:.1f}mm < 3mm → movej fallback")
+        indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=600)
+        wait_indy()
+    else:
+        indy.movel([float(x) for x in p_target],
+                    vel_ratio=100, acc_ratio=600)
+        time.sleep(0.2)
+        t0 = time.time()
+        while time.time() - t0 < 3.0:
+            if indy.get_motion_data()['is_in_motion']:
+                break
+            time.sleep(0.05)
+        while time.time() - t0 < 30.0:
+            if not indy.get_motion_data()['is_in_motion']:
+                break
+            time.sleep(0.05)
+        p_after = indy.get_control_data()['p']
+        moved = float(np.linalg.norm(np.array(p_after[:3]) - np.array(p_ready[:3])))
+        print(f"    이동량: {moved:.1f} mm")
+        if moved < 3.0:
+            print(f"    [WARN] movel 미동작 → movej fallback")
+            indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=600)
+            wait_indy()
     print(f"  [{label}] Strike 완료!")
 
     # ======== Phase 3: Home ========
+    input(f"\n  >>> [Enter] → Home 복귀\n")
     print(f"  [{label}] Phase 3: Home")
     indy.movej(HOME_Q_DEG, vel_ratio=30, acc_ratio=100)
     wait_indy()
