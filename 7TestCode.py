@@ -126,8 +126,6 @@ def replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, label="", strike
     print(f"  [{label}] Ready 정렬 완료")
 
     # ======== Phase 2: Strike (MoveL 직선) ========
-    p_ready = indy.get_control_data()['p']  # [x,y,z,rx,ry,rz] mm/deg
-    print(f"    Ready TCP: [{p_ready[0]:.1f}, {p_ready[1]:.1f}, {p_ready[2]:.1f}] mm")
 
     # 시뮬 FK: ready→follow 변위 계산
     pin = pb.my_robot.pinModel
@@ -142,6 +140,9 @@ def replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, label="", strike
     print(f"  >>> [Enter] = START → MoveL 직선 STRIKE")
     print(f"  {'='*56}")
     input()
+
+    p_ready = indy.get_control_data()['p']  # [x,y,z,rx,ry,rz] mm/deg
+    print(f"    Ready TCP: [{p_ready[0]:.1f}, {p_ready[1]:.1f}, {p_ready[2]:.1f}] mm")
 
     # movel 목표 = 현재 TCP + delta (자세 유지)
     p_target = list(p_ready)
@@ -198,12 +199,9 @@ print(f"실제 로봇 EE: {p_real[:3]} mm")
 print(f"오차: {np.linalg.norm(T_pin[:3,3]*1000 - np.array(p_real[:3])):.1f} mm")
 
 # %% Step 7: 데모 선택 + 라운드 수
-# ★ 여기서 데모 타입 선택:
-#   'pocket_phase1'  → 포켓볼 (노/빨/파 3공을 포켓에 넣기)
-#   'pocket_phase2'  → POSTECH 트릭샷 (O 완성)
-#   'maze'           → 3쿠션 당구
+# 'minigolf', 'billiards', 'maze' (3-cushion), 'pocket_phase1', 'pocket_phase2'
 DEMO_TYPE = 'pocket_phase1'
-NUM_ROUNDS = 1
+NUM_ROUNDS = 1  # pocket_phase1=3(공 3개), pocket_phase2=1(트릭샷 1회)
 
 print(f"데모: {DEMO_TYPE}, 라운드: {NUM_ROUNDS}")
 
@@ -257,19 +255,19 @@ elif DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
     if DEMO_TYPE == 'pocket_phase2':
         # Phase 2: 비전으로 흰 큐볼 + trick ball 2개 위치 받기
         # detect_balls()는 (white, red, yellow) 반환
-        print("  [VISION] 공 위치 감지 중... (큐볼=흰, trick1=노랑, trick2=빨강, 파랑)")
-        cue_pos, red_pos, yellow_pos, blue_pos = detect_balls()
+        print("  [VISION] 공 위치 감지 중... (큐볼=흰, trick1=노랑, trick2=빨강)")
+        cue_pos, red_pos, yellow_pos, black_pos = detect_balls()
         print(f"    큐볼: {cue_pos[:2]}")
         print(f"    Trick1(노랑): {yellow_pos[:2]}")
         print(f"    Trick2(빨강): {red_pos[:2]}")
-        print(f"    목적구3(파랑): {blue_pos[:2]}")
+        print(f"    목적구3(검정): {black_pos[:2]}")
 
         # 초기 배치: 비전으로 받은 위치 사용
         env.setup(
             cue_pos=cue_pos,
             target_pos=yellow_pos,  # trick ball 1 = 노란공
             ball2_pos=red_pos,      # trick ball 2 = 빨간공
-            ball3_pos=blue_pos,     # 목적구3 = 파란공
+            ball3_pos=black_pos,    # trick ball 3 = 검은공
             num_obstacles=0,
             setup_pockets=True,
         )
@@ -277,21 +275,21 @@ elif DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
     else:
         # Phase 1: 비전으로 모든 공 위치 받기
         print("  [VISION] 공 위치 감지 중...")
-        cue_pos, red_pos, yellow_pos, blue_pos = detect_balls()
+        cue_pos, yellow_pos, red_pos, black_pos = detect_balls()
         print(f"    큐볼: {cue_pos[:2]}")
         print(f"    목적구1(노랑): {yellow_pos[:2]}")
         print(f"    목적구2(빨강): {red_pos[:2]}")
-        print(f"    목적구3(파랑): {blue_pos[:2]}")
+        print(f"    목적구3(검정): {black_pos[:2]}")
 
         env.setup(
             cue_pos=cue_pos,
             target_pos=yellow_pos,
             ball2_pos=red_pos,
-            ball3_pos=blue_pos,
+            ball3_pos=black_pos,  # 3번째 공: 비전으로 감지된 위치
             num_obstacles=0,
             setup_pockets=True,
         )
-        NUM_ROUNDS = 1
+        NUM_ROUNDS = 3
 
     env.disable_robot_env_collision(robot_id)
     env.attach_compact_tool(robot_id, ee_link)
@@ -408,7 +406,7 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
         print(f"{'='*50}")
 
         from project.real_env_to_pybullet import detect_balls
-        ball_names = ['노란공', '빨간공', '파란공']
+        ball_names = ['노란공', '빨간공', '검은공']
         balls_pocketed = [False, False, False]
 
         for ball_idx in range(3):
@@ -420,8 +418,8 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
 
                 # 1) 비전으로 현재 공 위치 감지
                 print(f"  [VISION] 공 위치 감지...")
-                cue_pos, red_pos, yellow_pos, blue_pos = detect_balls()
-                print(f"    큐: {cue_pos[:2]}, 노: {yellow_pos[:2]}, 빨: {red_pos[:2]}, 파: {blue_pos[:2]}")
+                cue_pos, yellow_pos, red_pos, black_pos = detect_balls()
+                print(f"    큐: {cue_pos[:2]}, 노: {yellow_pos[:2]}, 빨: {red_pos[:2]}, 검: {black_pos[:2]}")
 
                 # 시뮬 환경에 비전 위치 반영
                 env.reset_balls(cue_pos=cue_pos)
@@ -429,18 +427,17 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                     env.target_ball_id, yellow_pos, [0,0,0,1], physicsClientId=pb.ClientId)
                 p.resetBasePositionAndOrientation(
                     env.ball2_id, red_pos, [0,0,0,1], physicsClientId=pb.ClientId)
-                if hasattr(env, 'ball3_id') and env.ball3_id is not None:
-                    p.resetBasePositionAndOrientation(
-                        env.ball3_id, blue_pos, [0,0,0,1], physicsClientId=pb.ClientId)
+                p.resetBasePositionAndOrientation(
+                    env.ball3_id, black_pos, [0,0,0,1], physicsClientId=pb.ClientId)
                 time.sleep(0.5)
 
                 # 타격 대상
                 if ball_idx == 0:
                     target_pos = yellow_pos
-                elif ball_idx == 1:
+                elif ball_idx == 2:
+                    target_pos = black_pos
+                else :
                     target_pos = red_pos
-                else:
-                    target_pos = blue_pos
 
 
                 # 2) 포켓 경로 계획
@@ -449,7 +446,7 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 for oi in range(3):
                     if oi == ball_idx or balls_pocketed[oi]:
                         continue
-                    ob = yellow_pos if oi == 0 else (red_pos if oi == 1 else blue_pos)
+                    ob = yellow_pos if oi == 0 else (red_pos if oi == 1 else black_pos)
                     other_balls.append(ob)
 
                 candidates = shot_planner.plan_pocket_shot(
@@ -508,8 +505,8 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                     balls_pocketed[ball_idx] = True
                     break
                 else:
-                    cue_f, red_f, yellow_f, blue_f = detect_result[0]
-                    print(f"    큐: {cue_f[:2]}, 노: {yellow_f[:2]}, 빨: {red_f[:2]}, 파: {blue_f[:2]}")
+                    cue_f, red_f, yellow_f, black_f = detect_result[0]
+                    print(f"    큐: {cue_f[:2]}, 노: {yellow_f[:2]}, 빨: {red_f[:2]}, 검: {black_f[:2]}")
                     print(f"  ✗ {ball_names[ball_idx]} 아직 테이블 위 — 재시도")
 
                 movej_both(HOME_Q_DEG, wait=True)
