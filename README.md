@@ -152,11 +152,61 @@ Phase 2 (물리): 자동 타격 → 카메라 관측 → Nelder-Mead로 6개 파
                (반발계수, 마찰, 속도전달비, 테이블 위치 보정)
 ```
 
-### 5. `ik_solver.py` — 역기구학 솔버
+### 5. `ik_solver.py` — 역기구학 솔버 + 손목 특이점 회피
 
 - 5회 반복 DLS IK 수렴 (1회만 하면 곡선 궤적 발생)
-- 궤적 전체에서 10% 샘플링하여 검증
-- 관절한계, 특이점, 바디뚫림, 관절점프 4단계 검사
+- 궤적 전체에서 검증 (`validate_from` 이후 모든 포인트)
+- **6단계 검증**: 관절한계, 바디뚫림, 관절점프, **도구팁 범위**, **J3·J5 특이점**, manipulability
+
+#### 손목 특이점 회피 (신규)
+
+**문제**: Indy7에서 joint3(전완 회전)과 joint5(EE 롤)의 회전축이 평행해지면 DLS IK가 발산하고 movel이 실패합니다. 이 조건은 joint4(손목 굽힘)가 축을 정렬시키는 특정 값에 있을 때 발생합니다.
+
+**감지 방법**: 관절 인덱스(J4=0°)가 아닌 **FK 기반 실제 축 외적**으로 감지합니다.
+```python
+# Pinocchio FK로 joint3, joint5의 월드 회전축 추출
+j3_axis = oMi[4].rotation @ [0, 0, 1]   # joint3 월드 축
+j5_axis = oMi[6].rotation @ [0, 0, 1]   # joint5 월드 축
+cross_mag = ||cross(j3_axis, j5_axis)||  # 0이면 축 평행 → 특이점
+```
+URDF joint origin에 프리셋 회전(rpy)이 있어서 관절값 0°가 곧 특이점이 아닙니다. FK 기반 외적이 유일하게 정확한 방법입니다.
+
+**회피 방법**: `solve_step()` 매 IK 스텝에서 cross_mag < 0.15이면 **q[4](joint4, 꺾임 관절)에 0.10 rad(5.7°) perturbation**을 가합니다. joint4가 J3-J5 사이의 꺾임을 담당하므로, 이걸 살짝 밀면 두 축이 분리됩니다.
+
+```python
+if cross_mag < 0.15:
+    push_dir = sign(q[4])  # 현재 방향으로 밀어서 자연스럽게 벗어남
+    q[4] += push_dir * 0.10
+```
+
+**검증 결과**: 7위치 × 8방향 = 56개 테스트에서 IK 성공률 76.8% → **98.2%** 달성.
+
+| 변경 | perturbation | 성공률 |
+|------|-------------|--------|
+| 수정 전 (J4 인덱스 기반) | q[3], 0.03 rad | 76.8% |
+| 수정 후 (FK 외적 기반) | q[4], 0.10 rad | **98.2%** |
+
+#### 도구 팁 범위 체크 (신규)
+
+EE 위치가 아닌 **ㄴ자 도구 팁의 실제 위치**가 테이블 쿠션 내부에 있는지 검사합니다.
+```python
+# SE3 목표에서 도구 팁 위치 계산
+tool_tip = ee_pos + R_ee @ [TOOL_HORIZONTAL_EXT, 0, -TOOL_VERTICAL_DROP]
+# 이 팁이 table_bounds 안에 있는지 검사 (5mm 마진)
+```
+
+#### `solve_trajectory_validated()` 반환값
+
+```python
+{
+    'q_trajectory': [...],           # IK 결과 궤적
+    'valid': bool,                   # 모든 검증 통과 여부
+    'issues': [str, ...],            # 실패 원인 상세 (진단용)
+    'min_manipulability': float,     # 최소 manipulability
+    'min_singularity_margin': float, # J3·J5 외적 최소값 (0=특이점)
+    'joint_limit_violations': [...],
+}
+```
 
 ### 6. `state_machine.py` — 최종 후보 검증 및 실행 (saveState)
 

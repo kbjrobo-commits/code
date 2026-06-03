@@ -380,7 +380,8 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 print(f"      - {issue}")
             if len(ik_res['issues']) > 5:
                 print(f"      ... +{len(ik_res['issues'])-5}건")
-            print(f"    [IK-DIAG] min_manipulability={ik_res['min_manipulability']:.6f}")
+            print(f"    [IK-DIAG] min_manipulability={ik_res['min_manipulability']:.6f}, "
+                  f"min_singularity_margin={ik_res.get('min_singularity_margin', -1):.4f}")
             return None
 
         q_traj_full = ik_res['q_trajectory']

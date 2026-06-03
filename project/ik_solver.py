@@ -101,7 +101,7 @@ class IKSolver:
     # ─── IK 풀이 ──────────────────────────────────────
 
     def solve_step(self, q_current, T_goal):
-        """단일 IK 스텝 (적응형 DLS damping 포함)
+        """단일 IK 스텝 (적응형 DLS damping + 특이점 회피 포함)
 
         Args:
             q_current: 현재 관절각 (n,1) ndarray (rad)
@@ -125,6 +125,24 @@ class IKSolver:
         # Damped Least Squares
         JJT = Jv @ Jv.T + lam * np.eye(6)
         q_new = q + self.gain * Jv.T @ np.linalg.solve(JJT, p_err)
+
+        # 특이점 회피: J3·J5 월드 축 외적이 작으면 perturbation
+        import pinocchio as pin
+        pin.forwardKinematics(self.pin.pinModel, self.pin.pinData, q_new)
+        if self.pin.pinModel.njoints >= 6:
+            # oMi: Pinocchio index = URDF joint index + 1 (universe joint가 0)
+            # joint3 = oMi[4], joint5 = oMi[6]
+            j3_axis = self.pin.pinData.oMi[4].rotation @ np.array([0, 0, 1])
+            j5_axis = self.pin.pinData.oMi[6].rotation @ np.array([0, 0, 1])
+            cross_mag = np.linalg.norm(np.cross(j3_axis, j5_axis))
+            if cross_mag < 0.15:
+                # joint4 (q[4], oMi[5]) = J3-J5 사이의 꺾임 관절
+                # 이걸 움직여야 두 축 사이 각도가 변함
+                j4_val = float(q_new[4, 0]) if q_new.ndim > 1 else float(q_new[4])
+                push_dir = 1.0 if j4_val >= 0 else -1.0
+                if abs(j4_val) < 0.01:
+                    push_dir = 1.0
+                q_new[4] += push_dir * 0.10  # ~5.7° perturbation
 
         # 관절 한계 클램핑
         q_new = np.clip(q_new, self.q_lower, self.q_upper)
@@ -166,7 +184,7 @@ class IKSolver:
         return q_trajectory
 
     def solve_trajectory_validated(self, q_init, trajectory_SE3,
-                                    w_threshold=0.002, dq_max=0.3,
+                                    w_threshold=0.002, dq_max=0.35,
                                     validate_from=0, table_bounds=None):
         """궤적 전체 IK 사전풀이 + 검증
 
@@ -179,7 +197,7 @@ class IKSolver:
             w_threshold: manipulability 경고 임계치
             dq_max: 연속 점 간 최대 허용 관절 변화 (rad)
             validate_from: 이 인덱스부터 검증 시작 (이전은 IK만 풀이)
-            table_bounds: dict {'x_min','x_max','y_min','y_max'} — EE 범위 검사용
+            table_bounds: dict {'x_min','x_max','y_min','y_max'} — 도구 팁 범위 검사용
 
         Returns:
             result: dict {
@@ -189,10 +207,15 @@ class IKSolver:
                 'manipulability': [float, ...],
                 'min_manipulability': float,
                 'joint_limit_violations': [(index, joint_id), ...],
+                'min_singularity_margin': float,  # J3·J5 외적 최소값
             }
         """
+        from project.config import (TOOL_HORIZONTAL_EXT, TOOL_VERTICAL_DROP,
+                                     MAZE_TABLE_SURFACE_HEIGHT, MAZE_TABLE_HEIGHT)
+
         q_trajectory = []
         manipulability_list = []
+        singularity_margins = []
         issues = []
         joint_violations = []
 
@@ -221,8 +244,7 @@ class IKSolver:
                     f"[pt {idx}] 관절 한계 초과: joints {viols}")
 
             # 3. 바디 뚫림 검사 (blocking, 테이블 높이 기반 동적 임계치)
-            from project.config import MAZE_TABLE_SURFACE_HEIGHT, MAZE_TABLE_HEIGHT
-            body_z_min = MAZE_TABLE_SURFACE_HEIGHT + MAZE_TABLE_HEIGHT / 2 + 0.03  # 테이블 표면 + 3cm 마진
+            body_z_min = MAZE_TABLE_SURFACE_HEIGHT + MAZE_TABLE_HEIGHT / 2 + 0.03
             import pinocchio as pin
             pin.forwardKinematics(self.pin.pinModel, self.pin.pinData, q_i)
             for j_id in range(3, self.pin.pinModel.njoints):
@@ -237,28 +259,34 @@ class IKSolver:
                 issues.append(
                     f"[pt {idx}] joint jump: max dq={np.degrees(dq):.1f}deg > {np.degrees(dq_max):.1f}deg")
 
-            # 5. EE 위치가 테이블 범위 밖인지 검사 (blocking)
+            # 5. 도구 팁이 테이블 범위 안에 있는지 검사 (blocking)
+            #    도구 팁 = EE_pos + R_ee @ [TOOL_HORIZONTAL_EXT, 0, -TOOL_VERTICAL_DROP]
             if table_bounds is not None:
-                ee_pos = self.pin.FK(q_i)[:3, 3]
-                margin = 0.05  # 5cm 마진 (도구 길이 고려)
-                if (ee_pos[0] < table_bounds['x_min'] - margin or
-                    ee_pos[0] > table_bounds['x_max'] + margin or
-                    ee_pos[1] < table_bounds['y_min'] - margin or
-                    ee_pos[1] > table_bounds['y_max'] + margin):
+                R_ee = T_goal[:3, :3]
+                ee_pos = T_goal[:3, 3]
+                tool_tip = ee_pos + R_ee @ np.array([TOOL_HORIZONTAL_EXT, 0, -TOOL_VERTICAL_DROP])
+                margin = 0.005  # 5mm 마진
+                if (tool_tip[0] < table_bounds['x_min'] - margin or
+                    tool_tip[0] > table_bounds['x_max'] + margin or
+                    tool_tip[1] < table_bounds['y_min'] - margin or
+                    tool_tip[1] > table_bounds['y_max'] + margin):
                     issues.append(
-                        f"[pt {idx}] EE 테이블 범위 밖: x={ee_pos[0]:.3f}, y={ee_pos[1]:.3f}")
+                        f"[pt {idx}] 도구팁 테이블밖: tip=({tool_tip[0]:.3f},{tool_tip[1]:.3f})")
 
-            # 6. 손목 특이점 경고 (soft warning — FK 기반 J3·J5 축 외적)
+            # 6. J3·J5 손목 특이점 검사 (blocking — FK 기반 축 외적)
             if self.pin.pinModel.njoints >= 6:
-                # J3(index 3)와 J5(index 5)의 월드 회전축 추출
-                j3_axis_world = self.pin.pinData.oMi[4].rotation @ np.array([0, 0, 1])
-                j5_axis_world = self.pin.pinData.oMi[6].rotation @ np.array([0, 0, 1])
-                cross_mag = np.linalg.norm(np.cross(j3_axis_world, j5_axis_world))
-                # cross_mag ≈ 0 → 축이 평행 → 특이점
+                j3_axis = self.pin.pinData.oMi[4].rotation @ np.array([0, 0, 1])
+                j5_axis = self.pin.pinData.oMi[6].rotation @ np.array([0, 0, 1])
+                cross_mag = np.linalg.norm(np.cross(j3_axis, j5_axis))
+                singularity_margins.append(cross_mag)
+                if cross_mag < 0.1:
+                    issues.append(
+                        f"[pt {idx}] 손목 특이점: cross(J3,J5)={cross_mag:.4f} < 0.1")
 
             q_prev = q_i.copy()
 
         min_w = min(manipulability_list) if manipulability_list else 0
+        min_sm = min(singularity_margins) if singularity_margins else 1.0
 
         return {
             'q_trajectory': q_trajectory,
@@ -267,5 +295,6 @@ class IKSolver:
             'manipulability': manipulability_list,
             'min_manipulability': min_w,
             'joint_limit_violations': joint_violations,
+            'min_singularity_margin': min_sm,
         }
 
