@@ -116,10 +116,23 @@ class StrikeTrajectoryPlanner:
         strike_dir = strike_dir / np.linalg.norm(strike_dir)
 
         # z축: 아래 (도구의 수직 부분이 내려감)
+        # 정확히 [0,0,-1]이면 J3·J5 손목 특이점에 빠지므로,
+        # strike_dir에 수직 방향(y축)으로 3° 틸트하여 자연스럽게 회피.
+        # 도구 팁 위치 변화: 60mm * sin(3°) ≈ 3.1mm (공 반지름 12mm 대비 미미)
+        tilt_rad = np.radians(3.0)
+        # y_perp = strike 수직 방향 (수평면 내)
+        y_perp = np.array([-strike_dir[1], strike_dir[0], 0.0])
+        y_perp = y_perp / np.linalg.norm(y_perp)
         z_axis = np.array([0.0, 0.0, -1.0])
+        z_axis = z_axis + np.sin(tilt_rad) * y_perp
+        z_axis = z_axis / np.linalg.norm(z_axis)
 
         # x축: 타격 방향 (도구의 수평 부분이 공을 향함)
         x_axis = strike_dir.copy()
+
+        # x축을 z축에 직교하도록 재계산 (틸트 후 직교성 보장)
+        x_axis = x_axis - np.dot(x_axis, z_axis) * z_axis
+        x_axis = x_axis / np.linalg.norm(x_axis)
 
         # y축: z × x (오른손 좌표계 완성)
         y_axis = np.cross(z_axis, x_axis)
