@@ -452,15 +452,8 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                     ob = yellow_pos if oi == 0 else (red_pos if oi == 1 else blue_pos)
                     other_balls.append(ob)
 
-                # next_target: 다음에 칠 공 (포지션 보너스용)
-                next_tgt = None
-                for ni in range(ball_idx + 1, 3):
-                    if not balls_pocketed[ni]:
-                        next_tgt = [yellow_pos, red_pos, blue_pos][ni]
-                        break
                 candidates = shot_planner.plan_pocket_shot(
-                    cue_pos, target_pos, other_balls,
-                    next_target_pos=next_tgt
+                    cue_pos, target_pos, other_balls
                 )
 
                 if not candidates:
