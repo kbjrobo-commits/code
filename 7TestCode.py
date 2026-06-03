@@ -343,8 +343,12 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
     # ========================================================
     MAX_ATTEMPTS_PER_BALL = 3
 
-    def _pocket_plan_and_traj(cue_p, target_p, strike_dir_2d, strike_speed):
-        """시뮬 계획 → IK 궤적 → (q_traj_deg, q_follow_deg, phases) 반환."""
+    def _pocket_plan_and_traj(cue_p, target_p, strike_dir_2d, strike_speed, execute_sim=True):
+        """시뮬 계획 → IK 궤적 → (q_traj_deg, q_follow_deg, phases) 반환.
+
+        Args:
+            execute_sim: True면 IK 통과 후 시뮬에서 실행, False면 IK 검증만
+        """
         T_now = pb.my_robot.pinModel.FK(pb.my_robot.q)
         q_now = pb.my_robot.q.copy()
         angle_rad = np.radians(MAZE_STRIKE_ANGLE_DEG)
@@ -376,20 +380,21 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
         q_ready = q_traj_full[approach_end - 1].copy()
         q_follow = ik.solve_step(q_ready, traj_c[-1])
 
-        # 시뮬에서 실행 (GUI 확인용)
-        for i in range(ph_c['approach'][0], ph_c['approach'][1]):
-            pb.MoveRobot(q_traj_full[i], degree=False)
-            time.sleep(0.002)
-        time.sleep(0.3)
-        sw_t = np.linalg.norm(traj_c[-1][:3,3] - traj_c[ph_c['approach'][1]-1][:3,3]) / (strike_speed * 0.7)
-        sw_t = np.clip(sw_t, 0.05, 0.8)
-        avg_qd = (q_follow - q_ready) / sw_t
-        if hasattr(pb.my_robot, '_qdot_des'):
-            pb.my_robot._qdot_des = avg_qd
-        pb.MoveRobot(q_follow, degree=False)
-        time.sleep(sw_t)
-        if hasattr(pb.my_robot, '_qdot_des'):
-            pb.my_robot._qdot_des = np.zeros([6, 1])
+        # 시뮬에서 실행 (GUI 확인용) — execute_sim=False이면 건너뜀
+        if execute_sim:
+            for i in range(ph_c['approach'][0], ph_c['approach'][1]):
+                pb.MoveRobot(q_traj_full[i], degree=False)
+                time.sleep(0.002)
+            time.sleep(0.3)
+            sw_t = np.linalg.norm(traj_c[-1][:3,3] - traj_c[ph_c['approach'][1]-1][:3,3]) / (strike_speed * 0.7)
+            sw_t = np.clip(sw_t, 0.05, 0.8)
+            avg_qd = (q_follow - q_ready) / sw_t
+            if hasattr(pb.my_robot, '_qdot_des'):
+                pb.my_robot._qdot_des = avg_qd
+            pb.MoveRobot(q_follow, degree=False)
+            time.sleep(sw_t)
+            if hasattr(pb.my_robot, '_qdot_des'):
+                pb.my_robot._qdot_des = np.zeros([6, 1])
 
         q_traj_deg = np.degrees(np.array(q_traj_full).reshape(-1, 6))
         q_follow_deg = np.degrees(np.array(q_follow).flatten())
@@ -462,25 +467,34 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                     print(f"  [FAIL] 포켓 경로 없음")
                     continue
 
-                # 후보 순서대로 IK 시도
+                # 후보 순서대로 IK 시도 (시뮬 실행 없이 빠르게 검증)
                 traj_data = None
+                best_ci = -1
                 for ci, cand in enumerate(candidates[:5]):
                     result = _pocket_plan_and_traj(
-                        cue_pos, target_pos, cand['strike_dir'], cand['strike_speed'])
+                        cue_pos, target_pos, cand['strike_dir'], cand['strike_speed'],
+                        execute_sim=False)
                     if result:
                         print(f"  [IK-OK] 후보 #{ci+1}")
                         traj_data = result
+                        best_ci = ci
                         break
                     else:
                         print(f"  [IK-FAIL] 후보 #{ci+1}")
-                        pb.MoveRobot(HOME_Q_DEG, degree=True)
-                        time.sleep(0.3)
 
                 if traj_data is None:
                     print(f"  [FAIL] 모든 후보 IK 실패")
                     pb.MoveRobot(HOME_Q_DEG, degree=True)
-                    time.sleep(1)
+                    time.sleep(0.5)
                     continue
+
+                # IK 통과한 후보를 시뮬에서 실행 (GUI 확인용)
+                pb.MoveRobot(HOME_Q_DEG, degree=True)
+                time.sleep(0.3)
+                best_cand = candidates[best_ci]
+                traj_data = _pocket_plan_and_traj(
+                    cue_pos, target_pos, best_cand['strike_dir'], best_cand['strike_speed'],
+                    execute_sim=True)
 
                 # 3) 실제 로봇 타격
                 _sim_execute_and_real_replay(traj_data, f"{ball_names[ball_idx]} #{attempt}")
