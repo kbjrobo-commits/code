@@ -873,10 +873,10 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed,
                            strike_angle_deg=None):
     """실제 로봇에서 접근→타격 재생 (Approach=MoveJ, Align/Strike=MoveL).
 
-    Phase 1 (Approach):  waypoint별 MoveJ
-    Phase 1.5 (Align):   Ready 위치 MoveL 정밀 정렬 (sim FK → 실제 TCP 오프셋 보정)
+    Phase 1 (Approach):  waypoint별 MoveJ (공 근처까지)
+    Phase 1.5 (Align):   타격 방향 반대로 STANDOFF_BACK_MM 후진 MoveL → 공 뒤 standoff 확보
     --- [Enter] 대기 ---
-    Phase 2 (Strike):    MoveL 직선 타격 (acc=600), 실패 시 movej fallback
+    Phase 2 (Strike):    standoff에서 (standoff+follow) 전진 MoveL 직선 타격
     Phase 3 (Home):      MoveJ 홈 복귀
 
     Args:
@@ -902,80 +902,64 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed,
         _wait_indy(indy, pb=pb)
     print(f"  [REAL] Approach 완료")
 
-    # === sim FK → 실제 TCP 정합 헬퍼 (Align MoveL용) ===
-    # Strike가 "실제 TCP + sim delta"로 동작하는 것과 동일한 원리로,
-    # sim FK 절대 포즈를 실제 TCP와의 상수 오프셋(툴/베이스 보정)만큼 보정한다.
-    # 오프셋은 상수이므로 Approach(MoveJ) 완료 직후의 실제 q/TCP로 측정한다.
-    from src.utils import Rot2eul
+    # === 타격 방향 (수평 단위벡터, base frame) ===
+    # 방향은 시뮬 FK(ready→follow) 변위로 정하고, strike_angle_deg가 주어지면 덮어쓴다.
     pin = pb.my_robot.pinModel
-
-    def _fk_p6(q_deg):
-        """sim FK(q[deg]) → [x,y,z mm, rx,ry,rz deg]"""
-        T = pin.FK(np.radians(np.asarray(q_deg, dtype=float).flatten()))
-        return np.concatenate([1000.0 * T[:3, 3],
-                               Rot2eul(T[:3, :3], seq='XYZ', degree=True)])
-
-    _q_now = indy.get_control_data()['q']                  # 실제 현재 관절각(deg)
-    _p_now = np.array(indy.get_control_data()['p'], dtype=float)  # 실제 TCP(mm/deg)
-    _offset6 = _p_now - _fk_p6(_q_now)                     # 상수 오프셋 (자세 오프셋≈0)
-    print(f"  [REAL] sim FK↔TCP 오프셋: pos[{_offset6[0]:.1f},{_offset6[1]:.1f},"
-          f"{_offset6[2]:.1f}]mm rot[{_offset6[3]:.1f},{_offset6[4]:.1f},{_offset6[5]:.1f}]deg")
-
-    def _target_p6(q_deg):
-        return (_fk_p6(q_deg) + _offset6).tolist()
-
-    # ======== Phase 1.5: Align (MoveL) ========
     q_ready = q_traj_deg[approach_end - 1]
-    print(f"  [REAL] Phase 1.5: MoveL Align")
-    time.sleep(0.5)
-    indy.movel(_target_p6(q_ready), vel_ratio=10, acc_ratio=30)
-    _wait_indy(indy, pb=pb)
-    time.sleep(0.5)
-
-    # ======== Phase 2: Strike (MoveL 직선) ========
-    # Align 후 Enter 대기 → movel 직선 타격
-
-    # 시뮬 FK: ready→follow 변위 계산 (pin은 위에서 정의됨)
     T_ready = pin.FK(np.radians(q_ready))
     T_follow = pin.FK(np.radians(q_follow_deg))
     delta_mm = (T_follow[:3, 3] - T_ready[:3, 3]) * 1000.0
 
-    # strike_angle_deg가 주어지면 스트로크 진행 방향(XY)을 해당 각도로 덮어쓴다.
-    # (수평 이동량과 z 변위는 FK 값을 유지 → 스트로크 길이는 그대로, 방향만 보정)
     if strike_angle_deg is not None:
-        horiz_mag = float(np.linalg.norm(delta_mm[:2]))
         ang = np.radians(strike_angle_deg)
-        delta_mm = np.array([
-            horiz_mag * np.cos(ang),
-            horiz_mag * np.sin(ang),
-            delta_mm[2],
-        ])
-        print(f"  [STRIKE DIR] 각도 {strike_angle_deg:.1f}° 적용 "
-              f"(수평 {horiz_mag:.1f}mm)")
+        dir_h = np.array([np.cos(ang), np.sin(ang), 0.0])
+        print(f"  [STRIKE DIR] 각도 {strike_angle_deg:.1f}° 적용")
+    else:
+        dir_h = np.array([delta_mm[0], delta_mm[1], 0.0])
+        _n = float(np.linalg.norm(dir_h))
+        dir_h = dir_h / _n if _n > 1e-6 else np.array([1.0, 0.0, 0.0])
 
-    dist_mm = float(np.linalg.norm(delta_mm))
+    # === standoff / 스트로크 거리 (실제 로봇 기준, mm) ===
+    # Approach(MoveJ) 직후 큐팁이 공에 거의 붙으므로(gap≈0),
+    # 타격 방향 반대로 STANDOFF_BACK_MM만큼 물러나 확실한 간격을 만든 뒤 직선 타격한다.
+    STANDOFF_BACK_MM = 80.0    # 공 뒤로 물러날 standoff (mm)
+    STRIKE_FOLLOW_MM = 40.0    # 임팩트 후 follow-through (mm)
+    stroke_mm = STANDOFF_BACK_MM + STRIKE_FOLLOW_MM
 
+    # ======== Phase 1.5: Align — 공 뒤 standoff로 후진 (MoveL) ========
+    p_ball = np.array(indy.get_control_data()['p'], dtype=float)  # approach 끝(≈공 접점)
+    p_standoff = list(p_ball)
+    p_standoff[0] = p_ball[0] - dir_h[0] * STANDOFF_BACK_MM
+    p_standoff[1] = p_ball[1] - dir_h[1] * STANDOFF_BACK_MM
+    # z/자세 유지 (수평 후진)
+    print(f"  [REAL] Phase 1.5: MoveL Align — 공 뒤 {STANDOFF_BACK_MM:.0f}mm standoff로 후진")
+    print(f"    현재(≈공) XY: [{p_ball[0]:.1f}, {p_ball[1]:.1f}] → standoff XY: "
+          f"[{p_standoff[0]:.1f}, {p_standoff[1]:.1f}] mm")
+    indy.movel([float(x) for x in p_standoff], vel_ratio=10, acc_ratio=30)
+    _wait_indy(indy, pb=pb)
+    time.sleep(0.5)
+
+    # ======== Phase 2: Strike (MoveL 직선) ========
     print(f"\n  {'='*56}")
-    print(f"  APPROACH 완료 — 로봇 정지")
-    print(f"  delta: [{delta_mm[0]:.1f}, {delta_mm[1]:.1f}, {delta_mm[2]:.1f}] mm ({dist_mm:.1f}mm)")
+    print(f"  standoff 도착 — 로봇 정지")
+    print(f"  strike 방향[{dir_h[0]:.3f}, {dir_h[1]:.3f}] / {stroke_mm:.0f}mm 전진 "
+          f"(standoff {STANDOFF_BACK_MM:.0f} + follow {STRIKE_FOLLOW_MM:.0f})")
     print(f"  >>> [Enter] = START → MoveL 직선 STRIKE")
     print(f"  {'='*56}")
     input()
-    p_ready = indy.get_control_state()['p']  # [x,y,z,rx,ry,rz] mm/deg
-    print(f"    Ready TCP: [{p_ready[0]:.1f}, {p_ready[1]:.1f}, {p_ready[2]:.1f}] mm")
 
-    # movel 목표 = 현재 TCP + delta (자세 유지)
-    p_target = list(p_ready)
-    print(p_target)
-    p_target[0] += delta_mm[0]
-    p_target[1] += delta_mm[1]
-    p_target[2] += delta_mm[2]
+    p_start = np.array(indy.get_control_data()['p'], dtype=float)  # standoff TCP
+    p_target = list(p_start)
+    p_target[0] = p_start[0] + dir_h[0] * stroke_mm
+    p_target[1] = p_start[1] + dir_h[1] * stroke_mm
+    # z/자세 유지 (수평 타격)
 
     print(f"  [REAL] Phase 2: MoveL Strike!")
+    print(f"    start : [{p_start[0]:.1f}, {p_start[1]:.1f}, {p_start[2]:.1f}] mm")
     print(f"    target: [{p_target[0]:.1f}, {p_target[1]:.1f}, {p_target[2]:.1f}] mm")
 
-    if dist_mm < 3.0:
-        print(f"    [WARN] 거리 {dist_mm:.1f}mm < 3mm → movej fallback")
+    if stroke_mm < 3.0:
+        print(f"    [WARN] 거리 {stroke_mm:.1f}mm < 3mm → movej fallback")
         indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=600)
         _wait_indy(indy, pb=pb)
     else:
@@ -992,9 +976,8 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed,
             if not indy.get_motion_data()['is_in_motion']:
                 break
             time.sleep(0.05)
-        p_after = indy.get_control_data()['p']
-        print(p_after)
-        moved = float(np.linalg.norm(np.array(p_after[:3]) - np.array(p_ready[:3])))
+        p_after = np.array(indy.get_control_data()['p'], dtype=float)
+        moved = float(np.linalg.norm(p_after[:3] - p_start[:3]))
         print(f"    이동량: {moved:.1f} mm")
         if moved < 3.0:
             print(f"    [WARN] movel 미동작 → movej fallback")
