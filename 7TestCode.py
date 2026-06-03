@@ -198,9 +198,12 @@ print(f"실제 로봇 EE: {p_real[:3]} mm")
 print(f"오차: {np.linalg.norm(T_pin[:3,3]*1000 - np.array(p_real[:3])):.1f} mm")
 
 # %% Step 7: 데모 선택 + 라운드 수
-# 'minigolf', 'billiards', 'maze' (3-cushion), 'pocket_phase1', 'pocket_phase2'
-DEMO_TYPE = 'pocket_phase2'
-NUM_ROUNDS = 1  # pocket_phase1=3(공 3개), pocket_phase2=1(트릭샷 1회)
+# ★ 여기서 데모 타입 선택:
+#   'pocket_phase1'  → 포켓볼 (노/빨 2공을 포켓에 넣기)
+#   'pocket_phase2'  → POSTECH 트릭샷 (O 완성)
+#   'maze'           → 3쿠션 당구
+DEMO_TYPE = 'pocket_phase1'
+NUM_ROUNDS = 1
 
 print(f"데모: {DEMO_TYPE}, 라운드: {NUM_ROUNDS}")
 
@@ -281,11 +284,10 @@ elif DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
             cue_pos=cue_pos,
             target_pos=yellow_pos,
             ball2_pos=red_pos,
-            ball3_pos=[MAZE_TABLE_CENTER_X, CY + W/6, ball_h],  # 3번째 공: 수동 배치 또는 비전
             num_obstacles=0,
             setup_pockets=True,
         )
-        NUM_ROUNDS = 3
+        NUM_ROUNDS = 1
 
     env.disable_robot_env_collision(robot_id)
     env.attach_compact_tool(robot_id, ee_link)
