@@ -225,7 +225,8 @@ elif DEMO_TYPE == 'maze':
     from project.environment.maze_env import MazeEnvironment
     from project.physics.cushion_planner import CushionShotPlanner
     from project.perception import SimPerception
-    from project.real_env_to_pybullet import detect_balls
+    from project.real_env_to_pybullet import detect_balls, load_position_offset
+    _pos_offset = load_position_offset()
     env = MazeEnvironment(pb.ClientId)
     CY, W = MAZE_TABLE_CENTER_Y, MAZE_TABLE_WIDTH
     H, TH = MAZE_TABLE_SURFACE_HEIGHT, MAZE_TABLE_HEIGHT
@@ -235,7 +236,8 @@ elif DEMO_TYPE == 'maze':
         cue_pos=cue_pos,
         target_pos=target_pos,
         ball2_pos=ball2_pos,
-        num_obstacles=0  # 순수 쓰리쿠션 (장애물 없음)
+        num_obstacles=0,  # 순수 쓰리쿠션 (장애물 없음)
+        position_offset=_pos_offset,
     )
     env.disable_robot_env_collision(robot_id)
     env.attach_compact_tool(robot_id, ee_link)
@@ -246,7 +248,8 @@ elif DEMO_TYPE == 'maze':
 elif DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
     from project.environment.maze_env import MazeEnvironment
     from project.physics.pocket_planner import PocketShotPlanner
-    from project.real_env_to_pybullet import detect_balls
+    from project.real_env_to_pybullet import detect_balls, load_position_offset
+    _pos_offset = load_position_offset()
     env = MazeEnvironment(pb.ClientId)
     CY, W = MAZE_TABLE_CENTER_Y, MAZE_TABLE_WIDTH
     H, TH = MAZE_TABLE_SURFACE_HEIGHT, MAZE_TABLE_HEIGHT
@@ -270,6 +273,7 @@ elif DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
             ball3_pos=black_pos,    # trick ball 3 = 검은공
             num_obstacles=0,
             setup_pockets=True,
+            position_offset=_pos_offset,
         )
         NUM_ROUNDS = 1
     else:
@@ -288,6 +292,7 @@ elif DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
             ball3_pos=black_pos,  # 3번째 공: 비전으로 감지된 위치
             num_obstacles=0,
             setup_pockets=True,
+            position_offset=_pos_offset,
         )
         NUM_ROUNDS = 3
 

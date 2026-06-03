@@ -236,6 +236,19 @@ class IKSolver:
                 issues.append(
                     f"[pt {idx}] joint jump: max dq={np.degrees(dq):.1f}deg > {np.degrees(dq_max):.1f}deg")
 
+            # 5. J4 손목 특이점 검사 (blocking)
+            #    J4(index 3) ≈ 0° 또는 ±180° → J3·J5 회전축이 평행 → movel 발산
+            j4_val = float(q_i[3, 0]) if q_i.ndim > 1 else float(q_i[3])
+            j4_deg = np.degrees(j4_val)
+            j4_from_zero = abs(j4_deg) % 360
+            if j4_from_zero > 180:
+                j4_from_zero = 360 - j4_from_zero
+            j4_from_180 = abs(j4_from_zero - 180)
+            j4_singularity_margin = min(j4_from_zero, j4_from_180)
+            if j4_singularity_margin < 15.0:
+                issues.append(
+                    f"[pt {idx}] J4 wrist singularity: J4={j4_deg:.1f}deg (margin={j4_singularity_margin:.1f}deg < 15deg)")
+
             q_prev = q_i.copy()
 
         min_w = min(manipulability_list) if manipulability_list else 0

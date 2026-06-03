@@ -31,7 +31,7 @@ class MazeEnvironment:
     def setup(self, cue_pos=None, target_pos=None, ball2_pos=None,
               ball3_pos=None, num_obstacles=5, seed=None,
               obstacle_positions=None, skip_balls=False,
-              setup_pockets=False):
+              setup_pockets=False, position_offset=None):
         """환경 초기화
 
         Args:
@@ -43,12 +43,18 @@ class MazeEnvironment:
             obstacle_positions: 수동 장애물 좌표 [(x,y), ...]
             skip_balls: True면 공 생성 생략 (캘리브레이션용)
             setup_pockets: True면 6개 포켓(코너4+사이드2) 생성
+            position_offset: {'x': float, 'y': float} 캘리브레이션 위치 오프셋
         """
         L = MAZE_TABLE_LENGTH
         W = MAZE_TABLE_WIDTH
         H = MAZE_TABLE_SURFACE_HEIGHT
         CX = MAZE_TABLE_CENTER_X
         CY = MAZE_TABLE_CENTER_Y
+
+        # 캘리브레이션 위치 오프셋 적용 (테이블/쿠션/포켓 전체 이동)
+        if position_offset is not None:
+            CX += position_offset.get('x', 0.0)
+            CY += position_offset.get('y', 0.0)
         TH = MAZE_TABLE_HEIGHT
         ball_h = H + TH / 2 + MAZE_BALL_RADIUS + 0.001
 
