@@ -167,7 +167,7 @@ class IKSolver:
 
     def solve_trajectory_validated(self, q_init, trajectory_SE3,
                                     w_threshold=0.002, dq_max=0.3,
-                                    validate_from=0):
+                                    validate_from=0, table_bounds=None):
         """궤적 전체 IK 사전풀이 + 검증
 
         실행 전에 전체 궤적을 풀어서 관절한계/특이점/급격한 점프를 확인.
@@ -179,6 +179,7 @@ class IKSolver:
             w_threshold: manipulability 경고 임계치
             dq_max: 연속 점 간 최대 허용 관절 변화 (rad)
             validate_from: 이 인덱스부터 검증 시작 (이전은 IK만 풀이)
+            table_bounds: dict {'x_min','x_max','y_min','y_max'} — EE 범위 검사용
 
         Returns:
             result: dict {
@@ -236,15 +237,24 @@ class IKSolver:
                 issues.append(
                     f"[pt {idx}] joint jump: max dq={np.degrees(dq):.1f}deg > {np.degrees(dq_max):.1f}deg")
 
-            # 5. J4 손목 특이점 경고 (soft warning — blocking하지 않음)
-            #    J4(index 3) ≈ 0° 또는 ±180° → J3·J5 회전축이 평행 → movel 시 주의
-            j4_val = float(q_i[3, 0]) if q_i.ndim > 1 else float(q_i[3])
-            j4_deg = np.degrees(j4_val)
-            j4_from_zero = abs(j4_deg) % 360
-            if j4_from_zero > 180:
-                j4_from_zero = 360 - j4_from_zero
-            j4_from_180 = abs(j4_from_zero - 180)
-            j4_singularity_margin = min(j4_from_zero, j4_from_180)
+            # 5. EE 위치가 테이블 범위 밖인지 검사 (blocking)
+            if table_bounds is not None:
+                ee_pos = self.pin.FK(q_i)[:3, 3]
+                margin = 0.05  # 5cm 마진 (도구 길이 고려)
+                if (ee_pos[0] < table_bounds['x_min'] - margin or
+                    ee_pos[0] > table_bounds['x_max'] + margin or
+                    ee_pos[1] < table_bounds['y_min'] - margin or
+                    ee_pos[1] > table_bounds['y_max'] + margin):
+                    issues.append(
+                        f"[pt {idx}] EE 테이블 범위 밖: x={ee_pos[0]:.3f}, y={ee_pos[1]:.3f}")
+
+            # 6. 손목 특이점 경고 (soft warning — FK 기반 J3·J5 축 외적)
+            if self.pin.pinModel.njoints >= 6:
+                # J3(index 3)와 J5(index 5)의 월드 회전축 추출
+                j3_axis_world = self.pin.pinData.oMi[4].rotation @ np.array([0, 0, 1])
+                j5_axis_world = self.pin.pinData.oMi[6].rotation @ np.array([0, 0, 1])
+                cross_mag = np.linalg.norm(np.cross(j3_axis_world, j5_axis_world))
+                # cross_mag ≈ 0 → 축이 평행 → 특이점
 
             q_prev = q_i.copy()
 

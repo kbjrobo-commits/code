@@ -371,7 +371,8 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
 
         approach_end = ph_c.get('approach', (0, 0))[1]
         val_from = int(approach_end * 0.65)
-        ik_res = ik.solve_trajectory_validated(q_now, traj_c, validate_from=val_from)
+        ik_res = ik.solve_trajectory_validated(q_now, traj_c, validate_from=val_from,
+                                                table_bounds=env.table_bounds)
 
         if not ik_res['valid']:
             print(f"    [IK-DIAG] 실패 원인 ({len(ik_res['issues'])}건):")
@@ -473,34 +474,26 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                     print(f"  [FAIL] 포켓 경로 없음")
                     continue
 
-                # 후보 순서대로 IK 시도 (시뮬 실행 없이 빠르게 검증)
+                # 후보 순서대로 IK + 시뮬 시도
                 traj_data = None
-                best_ci = -1
                 for ci, cand in enumerate(candidates[:5]):
                     result = _pocket_plan_and_traj(
                         cue_pos, target_pos, cand['strike_dir'], cand['strike_speed'],
-                        execute_sim=False)
+                        execute_sim=True)
                     if result:
                         print(f"  [IK-OK] 후보 #{ci+1}")
                         traj_data = result
-                        best_ci = ci
                         break
                     else:
                         print(f"  [IK-FAIL] 후보 #{ci+1}")
+                        pb.MoveRobot(HOME_Q_DEG, degree=True)
+                        time.sleep(0.3)
 
                 if traj_data is None:
                     print(f"  [FAIL] 모든 후보 IK 실패")
                     pb.MoveRobot(HOME_Q_DEG, degree=True)
-                    time.sleep(0.5)
+                    time.sleep(1)
                     continue
-
-                # IK 통과한 후보를 시뮬에서 실행 (GUI 확인용)
-                pb.MoveRobot(HOME_Q_DEG, degree=True)
-                time.sleep(0.3)
-                best_cand = candidates[best_ci]
-                traj_data = _pocket_plan_and_traj(
-                    cue_pos, target_pos, best_cand['strike_dir'], best_cand['strike_speed'],
-                    execute_sim=True)
 
                 # 3) 실제 로봇 타격
                 _sim_execute_and_real_replay(traj_data, f"{ball_names[ball_idx]} #{attempt}")
