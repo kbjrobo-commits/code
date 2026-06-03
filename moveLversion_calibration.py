@@ -871,10 +871,10 @@ def run_friction_calibration(indy, pb, env, ik, strike_speed=0.4,
 
 def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed,
                            strike_angle_deg=None):
-    """실제 로봇에서 접근→타격 재생 (Approach/Align/Strike 모두 MoveL 통일).
+    """실제 로봇에서 접근→타격 재생 (Approach=MoveJ, Align/Strike=MoveL).
 
-    Phase 1 (Approach):  waypoint별 MoveL (sim FK → 실제 TCP 오프셋 보정)
-    Phase 1.5 (Align):   Ready 위치 MoveL 정밀 정렬
+    Phase 1 (Approach):  waypoint별 MoveJ
+    Phase 1.5 (Align):   Ready 위치 MoveL 정밀 정렬 (sim FK → 실제 TCP 오프셋 보정)
     --- [Enter] 대기 ---
     Phase 2 (Strike):    MoveL 직선 타격 (acc=600), 실패 시 movej fallback
     Phase 3 (Home):      MoveJ 홈 복귀
@@ -887,9 +887,25 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed,
     approach_start = phases['approach'][0]
     approach_end = phases['approach'][1]
 
-    # === sim FK → 실제 TCP 정합 헬퍼 (Approach/Align MoveL 통일용) ===
+    # ======== Phase 1: Approach (MoveJ) ========
+    APPROACH_STEP = 100
+    APPROACH_VEL = 20
+    APPROACH_ACC = 50
+
+    waypoint_indices = list(range(approach_start, approach_end, APPROACH_STEP))
+    if waypoint_indices[-1] != approach_end - 1:
+        waypoint_indices.append(approach_end - 1)
+
+    print(f"  [REAL] Phase 1: MoveJ Approach ({len(waypoint_indices)} waypoints)...")
+    for wi, idx in enumerate(waypoint_indices):
+        indy.movej([float(x) for x in q_traj_deg[idx]], vel_ratio=APPROACH_VEL, acc_ratio=APPROACH_ACC)
+        _wait_indy(indy, pb=pb)
+    print(f"  [REAL] Approach 완료")
+
+    # === sim FK → 실제 TCP 정합 헬퍼 (Align MoveL용) ===
     # Strike가 "실제 TCP + sim delta"로 동작하는 것과 동일한 원리로,
     # sim FK 절대 포즈를 실제 TCP와의 상수 오프셋(툴/베이스 보정)만큼 보정한다.
+    # 오프셋은 상수이므로 Approach(MoveJ) 완료 직후의 실제 q/TCP로 측정한다.
     from src.utils import Rot2eul
     pin = pb.my_robot.pinModel
 
@@ -907,21 +923,6 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed,
 
     def _target_p6(q_deg):
         return (_fk_p6(q_deg) + _offset6).tolist()
-
-    # ======== Phase 1: Approach (MoveL) ========
-    APPROACH_STEP = 100
-    APPROACH_VEL = 20
-    APPROACH_ACC = 50
-
-    waypoint_indices = list(range(approach_start, approach_end, APPROACH_STEP))
-    if waypoint_indices[-1] != approach_end - 1:
-        waypoint_indices.append(approach_end - 1)
-
-    print(f"  [REAL] Phase 1: MoveL Approach ({len(waypoint_indices)} waypoints)...")
-    for wi, idx in enumerate(waypoint_indices):
-        indy.movel(_target_p6(q_traj_deg[idx]), vel_ratio=APPROACH_VEL, acc_ratio=APPROACH_ACC)
-        _wait_indy(indy, pb=pb)
-    print(f"  [REAL] Approach 완료")
 
     # ======== Phase 1.5: Align (MoveL) ========
     q_ready = q_traj_deg[approach_end - 1]
