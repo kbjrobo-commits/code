@@ -374,6 +374,12 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
         ik_res = ik.solve_trajectory_validated(q_now, traj_c, validate_from=val_from)
 
         if not ik_res['valid']:
+            print(f"    [IK-DIAG] 실패 원인 ({len(ik_res['issues'])}건):")
+            for issue in ik_res['issues'][:5]:  # 최대 5건만 출력
+                print(f"      - {issue}")
+            if len(ik_res['issues']) > 5:
+                print(f"      ... +{len(ik_res['issues'])-5}건")
+            print(f"    [IK-DIAG] min_manipulability={ik_res['min_manipulability']:.6f}")
             return None
 
         q_traj_full = ik_res['q_trajectory']
