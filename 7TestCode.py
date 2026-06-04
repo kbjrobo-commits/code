@@ -542,9 +542,11 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 t.start()
                 t.join(timeout=10.0)  # 10초 타임아웃
 
-                if detect_result[0][ball_idx+1] is None or t.is_alive() or detect_result[0] is None:
+                if detect_result[0] is None:
                     # 타임아웃 = 공이 안 보임 = 포켓 성공
-                    print(f"  ★ {ball_names[ball_idx]} 포켓 성공! (카메라에서 미감지)")
+
+                    print(f"  ★ {ball_names[ball_idx]} 포켓 성공! (카메라에서 미감지) Enter 입력.")
+                    input()
                     balls_pocketed[ball_idx] = True
                     break
                 else:
