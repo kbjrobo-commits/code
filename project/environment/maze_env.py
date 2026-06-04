@@ -13,6 +13,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from project.config import *
 from project.physics.cushion_rules import CushionContactTracker
+from project.physics.contact_model import (
+    apply_ball_dynamics, apply_table_dynamics, apply_cushion_dynamics)
 
 
 class MazeEnvironment:
@@ -123,8 +125,7 @@ class MazeEnvironment:
                                           baseVisualShapeIndex=vis,
                                           basePosition=[center[0], center[1], center[2]],
                                           physicsClientId=self.client)
-        p.changeDynamics(self.table_id, -1, lateralFriction=MAZE_BALL_FRICTION,
-                         restitution=0.5, physicsClientId=self.client)
+        apply_table_dynamics(self.table_id, self.client)
 
     def _create_cushions(self):
         L, W = MAZE_TABLE_LENGTH, MAZE_TABLE_WIDTH
@@ -178,8 +179,7 @@ class MazeEnvironment:
             cid = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=col,
                                     baseVisualShapeIndex=vis, basePosition=pos,
                                     physicsClientId=self.client)
-            p.changeDynamics(cid, -1, restitution=POCKET_DEMO_CUSHION_RESTITUTION,
-                             physicsClientId=self.client)
+            apply_cushion_dynamics(cid, self.client)
             self.cushion_ids.append(cid)
 
         # 상변 (y_max): 코너2곳 갭 → 2세그먼트
@@ -235,13 +235,7 @@ class MazeEnvironment:
         bid = p.createMultiBody(baseMass=mass, baseCollisionShapeIndex=col,
                                 baseVisualShapeIndex=vis, basePosition=position,
                                 physicsClientId=self.client)
-        p.changeDynamics(bid, -1, lateralFriction=MAZE_BALL_FRICTION,
-                         restitution=MAZE_BALL_RESTITUTION,
-                         rollingFriction=MAZE_BALL_ROLLING_FRICTION,
-                         spinningFriction=0.02,
-                         ccdSweptSphereRadius=MAZE_BALL_RADIUS * 0.5,
-                         contactProcessingThreshold=0,
-                         physicsClientId=self.client)
+        apply_ball_dynamics(bid, self.client)
         return bid
 
     def _create_cue_ball(self, position):
@@ -494,7 +488,7 @@ class MazeEnvironment:
             pos, _ = p.getBasePositionAndOrientation(bid, physicsClientId=self.client)
             for pp in self.pocket_positions:
                 dist = np.linalg.norm(np.array(pos[:2]) - pp[:2])
-                if dist < POCKET_RADIUS:
+                if dist < POCKET_CAPTURE_RADIUS:
                     # 포켓에 들어감 → 테이블 아래로 이동
                     p.resetBasePositionAndOrientation(
                         bid, [pp[0], pp[1], self._surface_z - 1.0],

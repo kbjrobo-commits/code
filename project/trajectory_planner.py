@@ -96,8 +96,7 @@ class StrikeTrajectoryPlanner:
         self.dt = dt
         self.traj_planner = TrajectoryPlanner()
 
-    def compute_strike_orientation(self, strike_direction, tool_rotation=0.0,
-                                    singularity_tilt=0.0):
+    def compute_strike_orientation(self, strike_direction, tool_rotation=0.0):
         """ㄴ자 도구용 엔드이펙터 자세 (Rotation matrix) 계산
 
         EE의 z축이 아래를 향하고 (도구의 수직 부분이 내려감),
@@ -110,9 +109,6 @@ class StrikeTrajectoryPlanner:
            └──● ← EE x축 방향 (strike_dir)
 
         tool_rotation(φ): z축 주위 회전. 자유도 활용.
-        singularity_tilt: J3·J5 특이점 회피용 틸트 각도 (rad).
-            0이면 z=[0,0,-1] 정확한 수직 (기본).
-            >0이면 strike 수직 방향(y_perp)으로 틸트하여 특이점 회피.
         """
         strike_dir = np.array(strike_direction).flatten()
         # 수평 성분만 사용 (ㄴ자 도구는 수평 타격)
@@ -122,18 +118,10 @@ class StrikeTrajectoryPlanner:
         # z축: 아래 (도구의 수직 부분이 내려감)
         z_axis = np.array([0.0, 0.0, -1.0])
 
-        # 조건부 틸트: singularity_tilt > 0이면 y_perp 방향으로 틸트
-        if abs(singularity_tilt) > 1e-6:
-            # y_perp = strike 수직 방향 (수평면 내)
-            y_perp = np.array([-strike_dir[1], strike_dir[0], 0.0])
-            y_perp = y_perp / np.linalg.norm(y_perp)
-            z_axis = z_axis + np.sin(singularity_tilt) * y_perp
-            z_axis = z_axis / np.linalg.norm(z_axis)
-
         # x축: 타격 방향 (도구의 수평 부분이 공을 향함)
         x_axis = strike_dir.copy()
 
-        # x축을 z축에 직교하도록 재계산 (틸트 시 직교성 보장)
+        # x축을 z축에 직교하도록 재계산
         x_axis = x_axis - np.dot(x_axis, z_axis) * z_axis
         x_axis = x_axis / np.linalg.norm(x_axis)
 
@@ -155,7 +143,7 @@ class StrikeTrajectoryPlanner:
                      strike_speed=0.5, approach_dist=0.08,
                      follow_dist=0.10, strike_height=None,
                      tool_offset=0.0, tool_rotation=0.0,
-                     table_bounds=None, singularity_tilt=0.0):
+                     table_bounds=None):
         """완전한 타격 궤적 생성 (ㄴ자 도구 수평 타격)
 
         Args:
@@ -186,8 +174,7 @@ class StrikeTrajectoryPlanner:
         strike_dir = np.array(strike_direction).flatten()
         strike_dir = strike_dir / np.linalg.norm(strike_dir)
 
-        R_strike = self.compute_strike_orientation(strike_dir, tool_rotation,
-                                                    singularity_tilt=singularity_tilt)
+        R_strike = self.compute_strike_orientation(strike_dir, tool_rotation)
 
         # R_strike 기반 ee_offset: 틸트 유무와 무관하게 도구 팁이 정확히 ball_pos에 도달
         # tool_local: EE 로컬 좌표에서 도구 팁 위치 (yaw 오프셋 적용)
