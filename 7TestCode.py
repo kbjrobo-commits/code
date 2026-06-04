@@ -573,14 +573,14 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 t.start()
                 t.join(timeout=10.0)  # 10초 타임아웃
 
-                if detect_result[0] is None or not t.is_alive() and detect_result[0] is None:
+                if detect_result[0][ball_idx+1] is None or t.is_alive() or detect_result[0] is None:
                     # 타임아웃 = 공이 안 보임 = 포켓 성공
                     print(f"  ★ {ball_names[ball_idx]} 포켓 성공! (카메라에서 미감지)")
                     balls_pocketed[ball_idx] = True
                     break
                 else:
                     cue_f, yellow_f, red_f, black_f = detect_result[0]
-                    print(f"    큐: {cue_f[:2]}, 노: {yellow_f[:2]}, 빨: {red_f[:2]}, 검: {black_f[:2]}")
+                    print(f"    큐: {cue_f[:2]}, 노: {yellow_f[:2] if yellow_f is not None else None}, 빨: {red_f[:2] if red_f is not None else None}, 검: {black_f[:2] if black_f is not None else None}")
                     print(f"  ✗ {ball_names[ball_idx]} 아직 테이블 위 — 재시도")
 
                 movej_both(HOME_Q_DEG, wait=True)
