@@ -599,6 +599,16 @@ def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 
     x_offset = 0.3 + L + 2 * thickness
     y_offset = (W + 2 * thickness) / 2 - float(center[1])  # 기본 좌표 변환
 
+    for pos in [white_ball, yellow_ball, red_ball, black_ball] :
+        if pos is not None :
+            x = pos[0]
+            y = pos[1]
+            if abs(x - (CX + L/2 - MAZE_BALL_RADIUS)) < 1e-6 : pos[0] = CX + L/2 - MAZE_BALL_RADIUS
+            elif abs(x - (CX - L/2 + MAZE_BALL_RADIUS)) < 1e-6 : pos[0] = CX - L/2 + MAZE_BALL_RADIUS
+
+            if abs(y - (CY + W/2 - MAZE_BALL_RADIUS)) < 1e-6 : pos[1] = CY + W/2 - MAZE_BALL_RADIUS
+            elif abs(y - (CY - W/2 + MAZE_BALL_RADIUS)) : pos[1] = CY - W/2 + MAZE_BALL_RADIUS
+
     cue_pos = [x_offset - float(white_ball[1]), float(white_ball[0]) - y_offset, float(ball_h)]
     target_pos = [x_offset - float(yellow_ball[1]), float(yellow_ball[0]) - y_offset, float(ball_h)] if ball_pocketed[0] is False else None
     ball2_pos = [x_offset - float(red_ball[1]), float(red_ball[0]) - y_offset, float(ball_h)] if ball_pocketed[1] is False else None
