@@ -489,16 +489,19 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 # 1) 비전으로 현재 공 위치 감지
                 print(f"  [VISION] 공 위치 감지...")
                 cue_pos, yellow_pos, red_pos, black_pos = detect_balls(balls_pocketed)
-                print(f"    큐: {cue_pos[:2]}, 노: {yellow_pos[:2]}, 빨: {red_pos[:2]}, 검: {black_pos[:2]}")
+                print(f"    큐: {cue_pos[:2]}, 노: {yellow_pos[:2] if yellow_pos is not None}, 빨: {red_pos[:2] if red_pos is not None}, 검: {black_pos[:2] if black_pos is not None}")
 
                 # 시뮬 환경에 비전 위치 반영
                 env.reset_balls(cue_pos=cue_pos)
-                p.resetBasePositionAndOrientation(
-                    env.target_ball_id, yellow_pos, [0,0,0,1], physicsClientId=pb.ClientId)
-                p.resetBasePositionAndOrientation(
-                    env.ball2_id, red_pos, [0,0,0,1], physicsClientId=pb.ClientId)
-                p.resetBasePositionAndOrientation(
-                    env.ball3_id, black_pos, [0,0,0,1], physicsClientId=pb.ClientId)
+                if yellow_pos is not None :
+                    p.resetBasePositionAndOrientation(
+                        env.target_ball_id, yellow_pos, [0,0,0,1], physicsClientId=pb.ClientId)
+                if red_pos is not None :
+                    p.resetBasePositionAndOrientation(
+                        env.ball2_id, red_pos, [0,0,0,1], physicsClientId=pb.ClientId)
+                if black_pos is not None :    
+                    p.resetBasePositionAndOrientation(
+                        env.ball3_id, black_pos, [0,0,0,1], physicsClientId=pb.ClientId)
                 time.sleep(0.5)
 
                 # 타격 대상
