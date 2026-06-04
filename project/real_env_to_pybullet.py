@@ -612,7 +612,7 @@ def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 
             elif abs(x - (CX - L/2 + MAZE_BALL_RADIUS)) < 1e-6 : pos[0] = CX - L/2 + MAZE_BALL_RADIUS
 
             if abs(y - (CY + W/2 - MAZE_BALL_RADIUS)) < 1e-6 : pos[1] = CY + W/2 - MAZE_BALL_RADIUS
-            elif abs(y - (CY - W/2 + MAZE_BALL_RADIUS)) : pos[1] = CY - W/2 + MAZE_BALL_RADIUS
+            elif abs(y - (CY - W/2 + MAZE_BALL_RADIUS)) < 1e-6 : pos[1] = CY - W/2 + MAZE_BALL_RADIUS
 
     # 캘리브레이션 오프셋 자동 적용
     pos_offset = load_position_offset()
