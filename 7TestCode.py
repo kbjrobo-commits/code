@@ -114,41 +114,10 @@ def replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, label="", strike
     # ======== Phase 1.5: Align (MoveL) ========
     # MoveL로 TCP 위치+방향 정밀 정렬 → 캐리브레이션 오프셋 유지 + 특이점 회피
     q_ready = q_traj_deg[approach_end - 1]
-    print(f"  [{label}] Phase 1.5: MoveL Align")
+    print(f"  [{label}] Phase 1.5: Align")
     time.sleep(0.5)
-
-    # 시물 FK로 Ready 위치의 TCP 좌표 계산
-    pin = pb.my_robot.pinModel
-    T_ready_fk = pin.FK(np.radians(q_ready))
-    p_ready_mm = T_ready_fk[:3, 3] * 1000.0
-    eul_ready = Rot2eul(T_ready_fk[:3, :3], seq='XYZ', degree=True)
-
-    # 현재 로봇 TCP와 시물 FK의 델타로 보정 (절대 좌표 오차 최소화)
-    p_current = indy.get_control_data()['p']
-    q_current_deg = indy.get_control_data()['q']
-    T_current_fk = pin.FK(np.radians(q_current_deg))
-    p_current_fk_mm = T_current_fk[:3, 3] * 1000.0
-
-    delta_pos = p_ready_mm - p_current_fk_mm
-    p_target_align = list(p_current)
-    p_target_align[0] += delta_pos[0]
-    p_target_align[1] += delta_pos[1]
-    p_target_align[2] += delta_pos[2]
-    # 방향은 시물 FK 기준 (틸트 포함된 자세)
-    p_target_align[3] = float(eul_ready[0])
-    p_target_align[4] = float(eul_ready[1])
-    p_target_align[5] = float(eul_ready[2])
-
-    print(f"    MoveL target: [{p_target_align[0]:.1f}, {p_target_align[1]:.1f}, {p_target_align[2]:.1f}] mm")
-    print(f"    MoveL euler:  [{p_target_align[3]:.1f}, {p_target_align[4]:.1f}, {p_target_align[5]:.1f}] deg")
-
-    try:
-        indy.movel([float(x) for x in p_target_align], vel_ratio=10, acc_ratio=30)
-        wait_indy()
-    except Exception as e:
-        print(f"    [WARN] MoveL Align 실패 ({e}), MoveJ fallback")
-        indy.movej([float(x) for x in q_ready], vel_ratio=10, acc_ratio=30)
-        wait_indy()
+    indy.movej([float(x) for x in q_ready], vel_ratio=10, acc_ratio=30)
+    wait_indy()
     time.sleep(0.5)
 
     # 진단
@@ -1058,3 +1027,4 @@ print("완료! 시뮬 연결 해제됨")
 # | neuromeka import 실패 | `pip install neuromeka` |
 # | movel 타격이 안됨 | teleop->task 전환 대기 1.5초 확인 |
 # | movel 속도 부족 | STRIKE_APPROACH_DIST 증가 (가속 거리 확보) |
+ㅍ
