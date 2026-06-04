@@ -71,14 +71,14 @@ RED_UPPER2 = np.array([180, 255, 255])
 YELLOW_LOWER = np.array([20, 100, 100])
 YELLOW_UPPER = np.array([35, 255, 255])
 
-BLUE_LOWER = np.array([100, 100, 50])
-BLUE_UPPER = np.array([130, 255, 255])
+BLACK_LOWER = np.array([100, 100, 50])
+BLACK_UPPER = np.array([130, 255, 255])
 
 # BLACK_LOWER = np.array([35, 80, 50])
 # BLACK_UPPER = np.array([85, 255, 255])
 
 
-def detect_balls() :
+def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 빨, 검] = {False if not pocketed else True}
     # Calibration Load
     calib = np.load("calibration_result.npz")
 
@@ -483,17 +483,17 @@ def detect_balls() :
             YELLOW_UPPER
         )
 
-        blue_mask = cv2.inRange(
-            hsv,
-            BLUE_LOWER,
-            BLUE_UPPER
-        )
-
-        # black_mask = cv2.inRange(
+        # blue_mask = cv2.inRange(
         #     hsv,
-        #     BLACK_LOWER,
-        #     BLACK_UPPER
+        #     BLUE_LOWER,
+        #     BLUE_UPPER
         # )
+
+        black_mask = cv2.inRange(
+            hsv,
+            BLACK_LOWER,
+            BLACK_UPPER
+        )
 
         white_mask = remove_corner_regions(
             white_mask
@@ -511,9 +511,9 @@ def detect_balls() :
         #     blue_mask
         # )
         
-        # black_mask = remove_corner_regions(
-        #     black_mask
-        # )
+        black_mask = remove_corner_regions(
+            black_mask
+        )
 
         white_ball = detect_ball_fixed(
             white_mask,
@@ -525,13 +525,20 @@ def detect_balls() :
             red_mask,
             warped_color,
             (0, 0, 255)
-        )
+        ) if ball_pocketed[1] is False else None
 
         yellow_ball = detect_ball_fixed(
             yellow_mask,
             warped_color,
             (0, 255, 255)
-        )
+        ) if ball_pocketed[0] is False else None
+
+        black_ball = detect_ball_fixed(
+            black_mask,
+            warped_color,
+            (0, 0, 0)
+        ) if ball_pocketed[2] is False else None
+
         cv2.imshow("Warped Result", warped_color)
         cv2.imshow("red", red_mask)
         cv2.imshow("yellow", yellow_mask)
@@ -540,8 +547,10 @@ def detect_balls() :
         # 세 공 모두 검출 성공
         if (
             white_ball is not None and
-            red_ball is not None and
-            yellow_ball is not None
+            (red_ball is not None or ball_pocketed[1] is True) and
+            (yellow_ball is not None or ball_pocketed[0] is True) and
+            (black_ball is not None or ball_pocketed[2] is True)
+
         ):
             print("All balls detected")
             cv2.waitKey(0)
@@ -560,12 +569,17 @@ def detect_balls() :
     red_ball = [
         red_ball[0] / 1000.0,
         red_ball[1] / 1000.0
-    ]
+    ] if ball_pocketed[1] is False else None
 
     yellow_ball = [
         yellow_ball[0] / 1000.0,
         yellow_ball[1] / 1000.0
-    ]
+    ] if ball_pocketed[0] is False else None
+
+    black_ball = [
+        black_ball[0] / 1000.0,
+        black_ball[1] / 1000.0
+    ] if ball_pocketed[2] is False else None
 
     # 좌표 변환: 카메라(pixel_to_table) → PyBullet 좌표계
     # pixel_to_table: (0,0)=좌상단 → (TABLE_WIDTH_MM, TABLE_HEIGHT_MM)=우하단
@@ -586,19 +600,21 @@ def detect_balls() :
     y_offset = (W + 2 * thickness) / 2 - float(center[1])  # 기본 좌표 변환
 
     cue_pos = [x_offset - float(white_ball[1]), float(white_ball[0]) - y_offset, float(ball_h)]
-    target_pos = [x_offset - float(yellow_ball[1]), float(yellow_ball[0]) - y_offset, float(ball_h)]
-    ball2_pos = [x_offset - float(red_ball[1]), float(red_ball[0]) - y_offset, float(ball_h)]
+    target_pos = [x_offset - float(yellow_ball[1]), float(yellow_ball[0]) - y_offset, float(ball_h)] if ball_pocketed[0] is False else None
+    ball2_pos = [x_offset - float(red_ball[1]), float(red_ball[0]) - y_offset, float(ball_h)] if ball_pocketed[1] is False else None
+    ball3_pos = [x_offset - float(black_ball[1]), float(black_ball[0]) - y_offset, float(ball_h)] if ball_pocketed[2] is False else None
 
     # 캘리브레이션 오프셋 자동 적용
     pos_offset = load_position_offset()
-    for pos in [cue_pos, target_pos, ball2_pos]:
-        pos[0] = float(pos[0] + pos_offset.get('x', 0.0))
-        pos[1] = float(pos[1] + pos_offset.get('y', 0.0))
+    for pos in [cue_pos, target_pos, ball2_pos, ball3_pos]:
+        if pos is not None :
+            pos[0] = float(pos[0] + pos_offset.get('x', 0.0))
+            pos[1] = float(pos[1] + pos_offset.get('y', 0.0))
 
-    return cue_pos, target_pos, ball2_pos
+    return cue_pos, target_pos, ball2_pos, ball3_pos
 
 
-def wait_real_balls_stop(interval=0.5, threshold_mm=3.0, max_wait=10.0, verbose=True):
+def wait_real_balls_stop(interval=0.5, threshold_mm=3.0, max_wait=10.0, verbose=True, ball_pocketed=[False, False, False]):
     """카메라로 공 정지 여부 판단.
 
     interval초 간격으로 2회 촬영 → 3공 모두 위치 변화 < threshold_mm이면 정지.
@@ -613,7 +629,7 @@ def wait_real_balls_stop(interval=0.5, threshold_mm=3.0, max_wait=10.0, verbose=
     prev = None
     while _time.time() - start < max_wait:
         try:
-            current = detect_balls()
+            current = detect_balls(ball_pocketed)
         except Exception as e:
             if verbose:
                 print(f"  [STOP] 검출 실패: {e}, 재시도...")
@@ -623,10 +639,10 @@ def wait_real_balls_stop(interval=0.5, threshold_mm=3.0, max_wait=10.0, verbose=
         if prev is not None:
             # 3공 모두 변위 계산
             displacements = []
-            for i in range(3):
+            for i in range(4):
                 d = np.linalg.norm(
                     np.array(current[i][:2]) - np.array(prev[i][:2])
-                ) * 1000  # m → mm
+                ) * 1000  if current[i] is not None and prev[i] is not None else 0.0 # m → mm
                 displacements.append(d)
 
             max_disp = max(displacements)
@@ -644,7 +660,7 @@ def wait_real_balls_stop(interval=0.5, threshold_mm=3.0, max_wait=10.0, verbose=
 
     if verbose:
         print(f"  [STOP] 타임아웃 ({max_wait}초), 마지막 위치 반환")
-    return prev if prev is not None else detect_balls()
+    return prev if prev is not None else detect_balls(ball_pocketed)
 
 
 if __name__ == "__main__":

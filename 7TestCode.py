@@ -488,7 +488,7 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
 
                 # 1) 비전으로 현재 공 위치 감지
                 print(f"  [VISION] 공 위치 감지...")
-                cue_pos, yellow_pos, red_pos, black_pos = detect_balls()
+                cue_pos, yellow_pos, red_pos, black_pos = detect_balls(balls_pocketed)
                 print(f"    큐: {cue_pos[:2]}, 노: {yellow_pos[:2]}, 빨: {red_pos[:2]}, 검: {black_pos[:2]}")
 
                 # 시뮬 환경에 비전 위치 반영
@@ -562,7 +562,7 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
 
                 def _detect_with_timeout():
                     try:
-                        detect_result[0] = detect_balls()
+                        detect_result[0] = detect_balls(balls_pocketed)
                     except:
                         pass
 
@@ -576,7 +576,7 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                     balls_pocketed[ball_idx] = True
                     break
                 else:
-                    cue_f, red_f, yellow_f, black_f = detect_result[0]
+                    cue_f, yellow_f, red_f, black_f = detect_result[0]
                     print(f"    큐: {cue_f[:2]}, 노: {yellow_f[:2]}, 빨: {red_f[:2]}, 검: {black_f[:2]}")
                     print(f"  ✗ {ball_names[ball_idx]} 아직 테이블 위 — 재시도")
 
@@ -595,7 +595,7 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
         # 1) 비전으로 공 위치 감지
         print(f"\n  [VISION] 공 위치 감지 (큐=흰, trick1=노랑, trick2=빨강)...")
         from project.real_env_to_pybullet import detect_balls
-        cue_pos, red_pos, yellow_pos = detect_balls()
+        cue_pos, red_pos, yellow_pos, _ = detect_balls()
         print(f"    큐볼: {cue_pos[:2]}")
         print(f"    Trick1(노랑): {yellow_pos[:2]}")
         print(f"    Trick2(빨강): {red_pos[:2]}")
@@ -647,7 +647,7 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 print(f"\n  [OBSERVE] 트릭샷 결과 확인...")
                 time.sleep(3)
                 try:
-                    cue_f, red_f, yellow_f = detect_balls()
+                    cue_f, red_f, yellow_f, _ = detect_balls()
                     o_cx = MAZE_TABLE_CENTER_X
                     o_cy = MAZE_TABLE_CENTER_Y - 0.12
                     rx, ry = 0.035, 0.045
@@ -1017,7 +1017,7 @@ for rnd_idx, (q_traj_d, q_follow_d, phs) in enumerate(saved_trajectories):
             from project.real_env_to_pybullet import detect_balls
             print(f"  [OBSERVE] 카메라로 최종 위치 감지 중...")
             time.sleep(3)  # 공 정지 대기
-            cue_f, tgt1_f, tgt2_f = detect_balls()
+            cue_f, tgt1_f, tgt2_f, _ = detect_balls()
             print(f"  최종 위치: cue={cue_f[:2]}, t1={tgt1_f[:2]}, t2={tgt2_f[:2]}")
 
             if DEMO_TYPE == 'pocket_phase2':
