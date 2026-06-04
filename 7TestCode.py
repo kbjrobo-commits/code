@@ -489,7 +489,7 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 # 1) 비전으로 현재 공 위치 감지
                 print(f"  [VISION] 공 위치 감지...")
                 cue_pos, yellow_pos, red_pos, black_pos = detect_balls(balls_pocketed)
-                print(f"    큐: {cue_pos[:2]}, 노: {yellow_pos[:2] if yellow_pos is not None}, 빨: {red_pos[:2] if red_pos is not None}, 검: {black_pos[:2] if black_pos is not None}")
+                print(f"    큐: {cue_pos[:2]}, 노: {yellow_pos[:2] if yellow_pos is not None else None}, 빨: {red_pos[:2] if red_pos is not None else None}, 검: {black_pos[:2] if black_pos is not None else None}")
 
                 # 시뮬 환경에 비전 위치 반영
                 env.reset_balls(cue_pos=cue_pos)
