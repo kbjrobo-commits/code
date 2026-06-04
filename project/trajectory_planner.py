@@ -96,7 +96,8 @@ class StrikeTrajectoryPlanner:
         self.dt = dt
         self.traj_planner = TrajectoryPlanner()
 
-    def compute_strike_orientation(self, strike_direction, tool_rotation=0.0):
+    def compute_strike_orientation(self, strike_direction, tool_rotation=0.0,
+                                    singularity_tilt=0.0):
         """ㄴ자 도구용 엔드이펙터 자세 (Rotation matrix) 계산
 
         EE의 z축이 아래를 향하고 (도구의 수직 부분이 내려감),
@@ -109,6 +110,9 @@ class StrikeTrajectoryPlanner:
            └──● ← EE x축 방향 (strike_dir)
 
         tool_rotation(φ): z축 주위 회전. 자유도 활용.
+        singularity_tilt: J3·J5 특이점 회피용 틸트 각도 (rad).
+            0이면 z=[0,0,-1] 정확한 수직 (기본).
+            >0이면 strike 수직 방향(y_perp)으로 틸트하여 특이점 회피.
         """
         strike_dir = np.array(strike_direction).flatten()
         # 수평 성분만 사용 (ㄴ자 도구는 수평 타격)
@@ -116,21 +120,20 @@ class StrikeTrajectoryPlanner:
         strike_dir = strike_dir / np.linalg.norm(strike_dir)
 
         # z축: 아래 (도구의 수직 부분이 내려감)
-        # 정확히 [0,0,-1]이면 J3·J5 손목 특이점에 빠지므로,
-        # strike_dir에 수직 방향(y축)으로 3° 틸트하여 자연스럽게 회피.
-        # 도구 팁 위치 변화: 60mm * sin(3°) ≈ 3.1mm (공 반지름 12mm 대비 미미)
-        tilt_rad = np.radians(3.0)
-        # y_perp = strike 수직 방향 (수평면 내)
-        y_perp = np.array([-strike_dir[1], strike_dir[0], 0.0])
-        y_perp = y_perp / np.linalg.norm(y_perp)
         z_axis = np.array([0.0, 0.0, -1.0])
-        z_axis = z_axis + np.sin(tilt_rad) * y_perp
-        z_axis = z_axis / np.linalg.norm(z_axis)
+
+        # 조건부 틸트: singularity_tilt > 0이면 y_perp 방향으로 틸트
+        if abs(singularity_tilt) > 1e-6:
+            # y_perp = strike 수직 방향 (수평면 내)
+            y_perp = np.array([-strike_dir[1], strike_dir[0], 0.0])
+            y_perp = y_perp / np.linalg.norm(y_perp)
+            z_axis = z_axis + np.sin(singularity_tilt) * y_perp
+            z_axis = z_axis / np.linalg.norm(z_axis)
 
         # x축: 타격 방향 (도구의 수평 부분이 공을 향함)
         x_axis = strike_dir.copy()
 
-        # x축을 z축에 직교하도록 재계산 (틸트 후 직교성 보장)
+        # x축을 z축에 직교하도록 재계산 (틸트 시 직교성 보장)
         x_axis = x_axis - np.dot(x_axis, z_axis) * z_axis
         x_axis = x_axis / np.linalg.norm(x_axis)
 
@@ -149,10 +152,10 @@ class StrikeTrajectoryPlanner:
         return R
 
     def plan_strike(self, T_current, ball_pos, strike_direction,
-                    strike_speed=0.5, approach_dist=0.08,
-                    follow_dist=0.10, strike_height=None,
-                    tool_offset=0.0, tool_rotation=0.0,
-                    table_bounds=None):
+                     strike_speed=0.5, approach_dist=0.08,
+                     follow_dist=0.10, strike_height=None,
+                     tool_offset=0.0, tool_rotation=0.0,
+                     table_bounds=None, singularity_tilt=0.0):
         """완전한 타격 궤적 생성 (ㄴ자 도구 수평 타격)
 
         Args:
@@ -183,21 +186,18 @@ class StrikeTrajectoryPlanner:
         strike_dir = np.array(strike_direction).flatten()
         strike_dir = strike_dir / np.linalg.norm(strike_dir)
 
-        # 타격 자세 (φ 회전 적용)
-        R_strike = self.compute_strike_orientation(strike_dir, tool_rotation)
+        R_strike = self.compute_strike_orientation(strike_dir, tool_rotation,
+                                                    singularity_tilt=singularity_tilt)
 
-        # ㄴ자 도구 오프셋: 큐팁이 ball_pos에 도달하려면
-        # EE는 공 뒤쪽(수평) + 공 위(수직)에 위치해야 함
-        # PIN_PB_EE_Z_OFFSET: Pinocchio FK가 PyBullet EE보다 62mm 높으므로 보정
-        # TOOL_YAW_OFFSET: 실제 도구가 EE z축 기준으로 틀어진 각도 보정
-        #   yaw는 EE 로컬 프레임에서의 회전 → world frame으로 변환 필요
-        #   EE x축=strike_dir, EE y축=[dy,-dx,0] (수평 직교)
-        if abs(TOOL_YAW_OFFSET) > 1e-6:
-            ee_y = np.array([strike_dir[1], -strike_dir[0], 0.0])
-            tool_dir = strike_dir * np.cos(TOOL_YAW_OFFSET) + ee_y * np.sin(TOOL_YAW_OFFSET)
-            ee_offset = -tool_dir * TOOL_HORIZONTAL_EXT + np.array([0, 0, TOOL_VERTICAL_DROP + PIN_PB_EE_Z_OFFSET])
-        else:
-            ee_offset = -strike_dir * TOOL_HORIZONTAL_EXT + np.array([0, 0, TOOL_VERTICAL_DROP + PIN_PB_EE_Z_OFFSET])
+        # R_strike 기반 ee_offset: 틸트 유무와 무관하게 도구 팁이 정확히 ball_pos에 도달
+        # tool_local: EE 로컬 좌표에서 도구 팁 위치 (yaw 오프셋 적용)
+        # z성분 양수: EE z축=[0,0,-1]이므로 +z_local = 아래 방향 = 도구 내려감
+        tool_local = np.array([
+            TOOL_HORIZONTAL_EXT * np.cos(TOOL_YAW_OFFSET),
+            TOOL_HORIZONTAL_EXT * np.sin(TOOL_YAW_OFFSET),
+            TOOL_VERTICAL_DROP
+        ])
+        ee_offset = -R_strike @ tool_local + np.array([0, 0, PIN_PB_EE_Z_OFFSET])
 
         # 1. 준비 위치: 공 뒤쪽 approach_dist만큼 (+ ㄴ자 오프셋)
         ready_pos = ball_pos - strike_dir * approach_dist + ee_offset

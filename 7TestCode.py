@@ -111,12 +111,44 @@ def replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, label="", strike
             print(f"    waypoint {wi+1}/{len(waypoint_indices)}")
     print(f"  [{label}] Approach 완료")
 
-    # ======== Phase 1.5: Align ========
+    # ======== Phase 1.5: Align (MoveL) ========
+    # MoveL로 TCP 위치+방향 정밀 정렬 → 캐리브레이션 오프셋 유지 + 특이점 회피
     q_ready = q_traj_deg[approach_end - 1]
-    print(f"  [{label}] Phase 1.5: Align")
+    print(f"  [{label}] Phase 1.5: MoveL Align")
     time.sleep(0.5)
-    indy.movej([float(x) for x in q_ready], vel_ratio=10, acc_ratio=30)
-    wait_indy()
+
+    # 시물 FK로 Ready 위치의 TCP 좌표 계산
+    pin = pb.my_robot.pinModel
+    T_ready_fk = pin.FK(np.radians(q_ready))
+    p_ready_mm = T_ready_fk[:3, 3] * 1000.0
+    eul_ready = Rot2eul(T_ready_fk[:3, :3], seq='XYZ', degree=True)
+
+    # 현재 로봇 TCP와 시물 FK의 델타로 보정 (절대 좌표 오차 최소화)
+    p_current = indy.get_control_data()['p']
+    q_current_deg = indy.get_control_data()['q']
+    T_current_fk = pin.FK(np.radians(q_current_deg))
+    p_current_fk_mm = T_current_fk[:3, 3] * 1000.0
+
+    delta_pos = p_ready_mm - p_current_fk_mm
+    p_target_align = list(p_current)
+    p_target_align[0] += delta_pos[0]
+    p_target_align[1] += delta_pos[1]
+    p_target_align[2] += delta_pos[2]
+    # 방향은 시물 FK 기준 (틸트 포함된 자세)
+    p_target_align[3] = float(eul_ready[0])
+    p_target_align[4] = float(eul_ready[1])
+    p_target_align[5] = float(eul_ready[2])
+
+    print(f"    MoveL target: [{p_target_align[0]:.1f}, {p_target_align[1]:.1f}, {p_target_align[2]:.1f}] mm")
+    print(f"    MoveL euler:  [{p_target_align[3]:.1f}, {p_target_align[4]:.1f}, {p_target_align[5]:.1f}] deg")
+
+    try:
+        indy.movel([float(x) for x in p_target_align], vel_ratio=10, acc_ratio=30)
+        wait_indy()
+    except Exception as e:
+        print(f"    [WARN] MoveL Align 실패 ({e}), MoveJ fallback")
+        indy.movej([float(x) for x in q_ready], vel_ratio=10, acc_ratio=30)
+        wait_indy()
     time.sleep(0.5)
 
     # 진단
@@ -374,9 +406,29 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
         ik_res = ik.solve_trajectory_validated(q_now, traj_c, validate_from=val_from,
                                                 table_bounds=env.table_bounds)
 
+        # IK 실패 + 특이점이 원인이면 3도 틸트로 재시도
+        if not ik_res['valid']:
+            has_singularity = any('특이점' in issue for issue in ik_res['issues'])
+            if has_singularity:
+                print(f"    [RETRY] 특이점 감지 -> 3deg 틸트로 재시도")
+                traj_c, ph_c = traj_planner.plan_strike(
+                    T_current=T_now, ball_pos=cue_p, strike_direction=sd3d,
+                    strike_speed=strike_speed,
+                    approach_dist=STRIKE_APPROACH_DIST,
+                    follow_dist=STRIKE_FOLLOW_DIST, strike_height=cue_p[2],
+                    tool_offset=tool_offset,
+                    table_bounds=env.table_bounds,
+                    singularity_tilt=np.radians(3.0))
+                approach_end = ph_c.get('approach', (0, 0))[1]
+                val_from = int(approach_end * 0.65)
+                ik_res = ik.solve_trajectory_validated(q_now, traj_c, validate_from=val_from,
+                                                        table_bounds=env.table_bounds)
+                if ik_res['valid']:
+                    print(f"    [RETRY] 틸트 재시도 성공!")
+
         if not ik_res['valid']:
             print(f"    [IK-DIAG] 실패 원인 ({len(ik_res['issues'])}건):")
-            for issue in ik_res['issues'][:5]:  # 최대 5건만 출력
+            for issue in ik_res['issues'][:5]:
                 print(f"      - {issue}")
             if len(ik_res['issues']) > 5:
                 print(f"      ... +{len(ik_res['issues'])-5}건")

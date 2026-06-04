@@ -396,6 +396,34 @@ class AutonomousStateMachine:
                     q_current, traj_c, validate_from=val_from
                 )
 
+                # IK 실패 + 특이점 원인이면 3도 틸트로 재시도
+                if not ik_result['valid']:
+                    has_sing = any('특이점' in iss for iss in ik_result.get('issues', []))
+                    if has_sing:
+                        traj_c2, ph_c2 = self.traj.plan_strike(
+                            T_current=T_current,
+                            ball_pos=ball_pos,
+                            strike_direction=strike_dir_3d,
+                            strike_speed=strike_speed,
+                            approach_dist=candidate.get('safe_approach_dist', STRIKE_APPROACH_DIST),
+                            follow_dist=STRIKE_FOLLOW_DIST,
+                            strike_height=strike_height,
+                            tool_offset=self.tool_offset,
+                            tool_rotation=phi,
+                            table_bounds=scan_data.get('table_bounds') if isinstance(scan_data, dict) else None,
+                            singularity_tilt=np.radians(3.0)
+                        )
+                        ae2 = ph_c2.get('approach', (0, 0))[1]
+                        vf2 = int(ae2 * 0.65)
+                        ik_result2 = self.controller.ik.solve_trajectory_validated(
+                            q_current, traj_c2, validate_from=vf2
+                        )
+                        if ik_result2['valid']:
+                            ik_result = ik_result2
+                            traj_c = traj_c2
+                            ph_c = ph_c2
+                            approach_end = ae2
+
                 if ik_result['valid']:
                     if ik_result['min_manipulability'] > best_min_w:
                         best_min_w = ik_result['min_manipulability']
