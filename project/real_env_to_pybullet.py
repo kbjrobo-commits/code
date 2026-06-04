@@ -658,7 +658,7 @@ def wait_real_balls_stop(interval=0.5, threshold_mm=3.0, max_wait=10.0, verbose=
             max_disp = max(displacements)
             if verbose:
                 print(f"  [STOP] 변위: cue={displacements[0]:.1f}mm, "
-                      f"t1={displacements[1]:.1f}mm, t2={displacements[2]:.1f}mm")
+                      f"t1={displacements[1]:.1f}mm, t2={displacements[2]:.1f}mm, t3={displacements[3]:.1f}mm")
 
             if max_disp < threshold_mm:
                 if verbose:
