@@ -509,7 +509,6 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                         strike_speed=ESCAPE_BALL_SPEED,  # 매우 느리게
                         approach_dist=0.10,  # 5cm만 접근
                         follow_dist=0.04,
-                        table_bounds=env.table_bounds
                     )
                     q_now = pb.my_robot.q.copy()
                     q_traj = ik.solve_trajectory(q_now, trajectory)
