@@ -459,177 +459,217 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
         replay_trajectory_on_real(q_traj_d, q_follow_d, ph, label=label)
 
     if DEMO_TYPE == 'pocket_phase1':
-        # === Phase 1: 포켓볼 Closed-Loop ===
+        # === Phase 1: 포켓볼 Closed-Loop (동적 타겟 선택) ===
         print(f"\n{'='*50}")
-        print(f"  POCKET PHASE 1: 포켓볼 (Closed-Loop)")
+        print(f"  POCKET PHASE 1: 포켓볼 (Closed-Loop, Dynamic Target)")
         print(f"{'='*50}")
 
         from project.real_env_to_pybullet import detect_balls
         ball_names = ['노란공', '빨간공', '검은공']
         balls_pocketed = [False, False, False]
 
-        for ball_idx in range(3):
-            if balls_pocketed[ball_idx]:
-                continue
+        def _candidate_priority(candidate):
+            """후보 우선순위 비교 (높을수록 좋음).
+            7단계: 포켓성공 > 합법 > 스크래치없음 > 정렬품질 > 점수 > 강건성 > 중앙품질
+            """
+            if candidate is None:
+                return (-1, -1, -1, -1.0, -float('inf'), 0)
+            return (
+                1 if candidate.get('target_pocketed', False) else 0,
+                0 if candidate.get('illegal_contact', False) else 1,
+                0 if candidate.get('cue_scratched', False) else 1,
+                candidate.get('alignment_quality', 0.0) or 0.0,
+                candidate.get('score', -float('inf')),
+                candidate.get('robust_count', 0) or 0,
+            )
 
-            for attempt in range(1, MAX_ATTEMPTS_PER_BALL + 1):
-                print(f"\n  --- {ball_names[ball_idx]} (시도 {attempt}/{MAX_ATTEMPTS_PER_BALL}) ---")
+        def _get_ball_pos(ball_idx, yellow_pos, red_pos, black_pos):
+            """ball_idx에 대응하는 공 위치 반환."""
+            if ball_idx == 0:
+                return yellow_pos
+            elif ball_idx == 1:
+                return red_pos
+            else:
+                return black_pos
 
-                # 1) 비전으로 현재 공 위치 감지
-                print(f"  [VISION] 공 위치 감지...")
-                cue_pos, yellow_pos, red_pos, black_pos = detect_balls(balls_pocketed)
-                print(f"    큐: {cue_pos[:2]}, 노: {yellow_pos[:2] if yellow_pos is not None else None}, 빨: {red_pos[:2] if red_pos is not None else None}, 검: {black_pos[:2] if black_pos is not None else None}")
-
-                # 시뮬 환경에 비전 위치 반영
-                env.reset_balls(cue_pos=cue_pos, target_pos=yellow_pos, ball2_pos=red_pos, ball3_pos=black_pos)
-                # if yellow_pos is not None :
-                #     p.resetBasePositionAndOrientation(
-                #         env.target_ball_id, yellow_pos, [0,0,0,1], physicsClientId=pb.ClientId)
-                # if red_pos is not None :
-                #     p.resetBasePositionAndOrientation(
-                #         env.ball2_id, red_pos, [0,0,0,1], physicsClientId=pb.ClientId)
-                # if black_pos is not None :    
-                #     p.resetBasePositionAndOrientation(
-                #         env.ball3_id, black_pos, [0,0,0,1], physicsClientId=pb.ClientId)
-                time.sleep(0.5)
-                
-                if cue_ball_is_near_cushion(cue_pos) is True :
-                    CX = MAZE_TABLE_CENTER_X
-                    CY = MAZE_TABLE_CENTER_Y
-                    # escape니까 테이블 offset은 굳이 미적용
-                    center = [CX, CY, cue_pos[2]]
-                    strike_dir = [center[0] - cue_pos[0], center[1] - cue_pos[1], 0]
-                    strike_dir = strike_dir / (np.linalg.norm(strike_dir) + 1e-6)
-                    cue_pos[2] += ESCAPE_STRIKE_HEIGHT_OFFSET
-                    trajectory, phases = traj_planner.plan_strike(
-                        T_current=pb.my_robot.pinModel.FK(pb.my_robot.q),
-                        ball_pos=cue_pos,
-                        strike_direction=strike_dir,
-                        strike_speed=ESCAPE_BALL_SPEED,  # 매우 느리게
-                        approach_dist=0.05,  # 5cm만 접근
-                        follow_dist=0.02,
-                    )
-                    q_now = pb.my_robot.q.copy()
-                    q_traj = ik.solve_trajectory(q_now, trajectory)
-                    q_traj_deg = np.degrees(np.array(q_traj).reshape(-1, 6))
-
-                    print("  [SIM] 시뮬 실행...")
-                    # Approach
-                    for i in range(phases['approach'][0], phases['approach'][1]):
-                        pb.MoveRobot(q_traj[i], degree=False)
-                        time.sleep(0.002)
-                    q_ready = q_traj[phases['approach'][1] - 1].copy()
-                    time.sleep(0.3)
-
-                    # Strike (sim)
-                    q_follow_idx = min(phases['follow'][1] - 1, len(q_traj) - 1)
-                    q_follow = q_traj[q_follow_idx]
-                    pb.MoveRobot(q_follow, degree=False)
-                    time.sleep(0.5)
-
-                    try:
-                        # 실제 로봇도 진행 (strike 후 복귀까지)
-                        print("  [REAL] 실제 로봇 재생...")
-                        q_follow_deg = np.degrees(q_follow)
-                        print("  실제 로봇 접근 중...")
-                        replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, strike_speed = ESCAPE_BALL_SPEED)
-
-                    except Exception as e:
-                        print(f"  [ERROR] 실제 로봇 실행 실패: {e}")
-                        try:
-                            indy.recover()
-                        except:
-                            pass
-                        movej_both(HOME_Q_DEG, wait=True)
-                    
-                    time.sleep(2)
+        def _get_other_balls(ball_idx, balls_pocketed, yellow_pos, red_pos, black_pos):
+            """ball_idx를 제외한 포켓 안 된 공들의 위치 리스트."""
+            other_balls = []
+            for oi in range(3):
+                if oi == ball_idx or balls_pocketed[oi]:
                     continue
-
-                # 타격 대상
-                if ball_idx == 0:
-                    target_pos = yellow_pos
-                elif ball_idx == 2:
-                    target_pos = black_pos
-                else :
-                    target_pos = red_pos
-
-
-                # 2) 포켓 경로 계획
-                print(f"  [PLAN] 포켓 경로 계획 중...")
-                other_balls = []
-                for oi in range(3):
-                    if oi == ball_idx or balls_pocketed[oi]:
-                        continue
-                    ob = yellow_pos if oi == 0 else (red_pos if oi == 1 else black_pos)
+                ob = _get_ball_pos(oi, yellow_pos, red_pos, black_pos)
+                if ob is not None:
                     other_balls.append(ob)
+            return other_balls
 
+        total_shots = 0
+        max_total_shots = MAX_ATTEMPTS_PER_BALL * 3
+
+        while sum(balls_pocketed) < 3 and total_shots < max_total_shots:
+            total_shots += 1
+            remaining = [i for i in range(3) if not balls_pocketed[i]]
+
+            if not remaining:
+                break
+
+            print(f"\n{'='*50}")
+            print(f"  Shot {total_shots}/{max_total_shots} "
+                  f"(남은 공: {[ball_names[i] for i in remaining]})")
+            print(f"{'='*50}")
+
+            # 1) 비전으로 현재 공 위치 감지
+            print(f"  [VISION] 공 위치 감지...")
+            cue_pos, yellow_pos, red_pos, black_pos = detect_balls(balls_pocketed)
+            print(f"    큐: {cue_pos[:2]}, 노: {yellow_pos[:2] if yellow_pos is not None else None}, 빨: {red_pos[:2] if red_pos is not None else None}, 검: {black_pos[:2] if black_pos is not None else None}")
+
+            # 시뮬 환경에 비전 위치 반영
+            env.reset_balls(cue_pos=cue_pos, target_pos=yellow_pos, ball2_pos=red_pos, ball3_pos=black_pos)
+            time.sleep(0.5)
+
+            # 2) Escape shot 체크 (기존 로직 그대로)
+            if cue_ball_is_near_cushion(cue_pos) is True:
+                print(f"  [ESCAPE] 큐볼이 벽 근처 — 탈출 타격")
+                CX = MAZE_TABLE_CENTER_X
+                CY = MAZE_TABLE_CENTER_Y
+                center = [CX, CY, cue_pos[2]]
+                strike_dir = [center[0] - cue_pos[0], center[1] - cue_pos[1], 0]
+                strike_dir = strike_dir / (np.linalg.norm(strike_dir) + 1e-6)
+                cue_pos[2] += ESCAPE_STRIKE_HEIGHT_OFFSET
+                trajectory, phases = traj_planner.plan_strike(
+                    T_current=pb.my_robot.pinModel.FK(pb.my_robot.q),
+                    ball_pos=cue_pos,
+                    strike_direction=strike_dir,
+                    strike_speed=ESCAPE_BALL_SPEED,
+                    approach_dist=0.05,
+                    follow_dist=0.02,
+                )
+                q_now = pb.my_robot.q.copy()
+                q_traj = ik.solve_trajectory(q_now, trajectory)
+                q_traj_deg = np.degrees(np.array(q_traj).reshape(-1, 6))
+
+                print("  [SIM] 시뮬 실행...")
+                for i in range(phases['approach'][0], phases['approach'][1]):
+                    pb.MoveRobot(q_traj[i], degree=False)
+                    time.sleep(0.002)
+                q_ready = q_traj[phases['approach'][1] - 1].copy()
+                time.sleep(0.3)
+
+                q_follow_idx = min(phases['follow'][1] - 1, len(q_traj) - 1)
+                q_follow = q_traj[q_follow_idx]
+                pb.MoveRobot(q_follow, degree=False)
+                time.sleep(0.5)
+
+                try:
+                    print("  [REAL] 실제 로봇 재생...")
+                    q_follow_deg = np.degrees(q_follow)
+                    replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, strike_speed=ESCAPE_BALL_SPEED)
+                except Exception as e:
+                    print(f"  [ERROR] 실제 로봇 실행 실패: {e}")
+                    try:
+                        indy.recover()
+                    except:
+                        pass
+                    movej_both(HOME_Q_DEG, wait=True)
+
+                time.sleep(2)
+                continue  # escape 후 다시 비전 감지부터
+
+            # 3) 남은 모든 공에 대해 plan_pocket_shot → 최적 타겟 동적 선택
+            best_ball_idx = None
+            best_candidates = None
+            best_priority = (-1, -1, -1, -1.0, -float('inf'), 0)
+
+            for ball_idx in remaining:
+                target_pos = _get_ball_pos(ball_idx, yellow_pos, red_pos, black_pos)
+                if target_pos is None:
+                    balls_pocketed[ball_idx] = True
+                    continue
+                other_balls = _get_other_balls(ball_idx, balls_pocketed, yellow_pos, red_pos, black_pos)
+
+                print(f"  [PLAN] {ball_names[ball_idx]} 포켓 경로 탐색...")
                 candidates = shot_planner.plan_pocket_shot(
                     cue_pos, target_pos, other_balls
                 )
 
                 if not candidates:
-                    print(f"  [FAIL] 포켓 경로 없음")
+                    print(f"    {ball_names[ball_idx]}: 후보 없음")
                     continue
 
-                # 후보 순서대로 IK + 시뮬 시도
-                traj_data = None
-                for ci, cand in enumerate(candidates[:5]):
-                    result = _pocket_plan_and_traj(
-                        cue_pos, target_pos, cand['strike_dir'], cand['strike_speed'],
-                        execute_sim=True)
-                    if result:
-                        print(f"  [IK-OK] 후보 #{ci+1}")
-                        traj_data = result
-                        break
-                    else:
-                        print(f"  [IK-FAIL] 후보 #{ci+1}")
-                        pb.MoveRobot(HOME_Q_DEG, degree=True)
-                        time.sleep(0.3)
+                top = candidates[0]
+                priority = _candidate_priority(top)
+                print(f"    {ball_names[ball_idx]}: score={top.get('score', -1):.0f}, "
+                      f"pocketed={top.get('target_pocketed', False)}, "
+                      f"align={top.get('alignment_quality', 0.0):.2f}, "
+                      f"robust={top.get('robust_count', 0)}, "
+                      f"priority={priority}")
 
-                if traj_data is None:
-                    print(f"  [FAIL] 모든 후보 IK 실패")
-                    pb.MoveRobot(HOME_Q_DEG, degree=True)
-                    time.sleep(1)
-                    continue
+                if priority > best_priority:
+                    best_priority = priority
+                    best_ball_idx = ball_idx
+                    best_candidates = candidates
 
-                # 3) 실제 로봇 타격
-                _sim_execute_and_real_replay(traj_data, f"{ball_names[ball_idx]} #{attempt}")
-
-                # 4) 비전으로 결과 확인
-                # detect_balls()는 3공 모두 감지될 때까지 무한 루프이므로,
-                # 포켓된 공이 있으면 타임아웃됨 → 포켓 성공으로 판단
-                print(f"  [OBSERVE] 결과 확인 중...")
-                time.sleep(3)
-
-                import threading
-                detect_result = [None]  # [cue, red, yellow] or None
-
-
-                # def _detect_with_timeout():
-                #     try:
-                #         detect_result[0] = detect_balls(balls_pocketed)
-                #     except:
-                #         pass
-
-                # t = threading.Thread(target=_detect_with_timeout, daemon=True)
-                # t.start()
-                # t.join(timeout=10.0)  # 10초 타임아웃
-
-                detect_result[0] = detect_balls(balls_pocketed)
-                # detect_ball() : 10초이상 걸리면 타임 아웃 => None 반환
-                # detect가 안되면 자동종료, detect가 되면 키입력 받은 후 종료
-
-                if detect_result[0] is None:
-                    print(f"  ★ {ball_names[ball_idx]} 포켓 성공! (카메라에서 미감지)")
-                    balls_pocketed[ball_idx] = True
-                    break
-                else:
-                    cue_f, yellow_f, red_f, black_f = detect_result[0]
-                    print(f"    큐: {cue_f[:2]}, 노: {yellow_f[:2] if yellow_f is not None else None}, 빨: {red_f[:2] if red_f is not None else None}, 검: {black_f[:2] if black_f is not None else None}")
-                    print(f"  ✗ {ball_names[ball_idx]} 아직 테이블 위 — 재시도")
-
+            if best_ball_idx is None or best_candidates is None:
+                print(f"  [FAIL] 모든 공에 대해 포켓 경로 없음")
                 movej_both(HOME_Q_DEG, wait=True)
                 time.sleep(1)
+                continue
+
+            ball_idx = best_ball_idx
+            target_pos = _get_ball_pos(ball_idx, yellow_pos, red_pos, black_pos)
+            print(f"\n  [CHOSEN] ★ {ball_names[ball_idx]} 선택 "
+                  f"(score={best_candidates[0].get('score', -1):.0f}, "
+                  f"pocketed={best_candidates[0].get('target_pocketed', False)})")
+
+            # 4) 후보 순서대로 IK + 시뮬 시도 (기존 로직 유지)
+            traj_data = None
+            for ci, cand in enumerate(best_candidates[:5]):
+                result = _pocket_plan_and_traj(
+                    cue_pos, target_pos, cand['strike_dir'], cand['strike_speed'],
+                    execute_sim=True)
+                if result:
+                    print(f"  [IK-OK] 후보 #{ci+1}")
+                    traj_data = result
+                    break
+                else:
+                    print(f"  [IK-FAIL] 후보 #{ci+1}")
+                    pb.MoveRobot(HOME_Q_DEG, degree=True)
+                    time.sleep(0.3)
+
+            if traj_data is None:
+                print(f"  [FAIL] 모든 후보 IK 실패")
+                pb.MoveRobot(HOME_Q_DEG, degree=True)
+                time.sleep(1)
+                continue
+
+            # 5) 실제 로봇 타격
+            _sim_execute_and_real_replay(traj_data, f"{ball_names[ball_idx]} #{total_shots}")
+
+            # 6) 비전으로 결과 확인
+            print(f"  [OBSERVE] 결과 확인 중...")
+            time.sleep(3)
+
+            detect_result = [None]
+            detect_result[0] = detect_balls(balls_pocketed)
+
+            if detect_result[0] is None:
+                print(f"  ★ {ball_names[ball_idx]} 포켓 성공! (카메라에서 미감지)")
+                balls_pocketed[ball_idx] = True
+            else:
+                cue_f, yellow_f, red_f, black_f = detect_result[0]
+                print(f"    큐: {cue_f[:2]}, 노: {yellow_f[:2] if yellow_f is not None else None}, 빨: {red_f[:2] if red_f is not None else None}, 검: {black_f[:2] if black_f is not None else None}")
+                # 비전 결과로 어떤 공이 사라졌는지 체크
+                ball_positions_after = [yellow_f, red_f, black_f]
+                for bi in range(3):
+                    if not balls_pocketed[bi] and ball_positions_after[bi] is None:
+                        print(f"  ★ {ball_names[bi]} 포켓 성공! (비전에서 사라짐)")
+                        balls_pocketed[bi] = True
+
+                if not balls_pocketed[ball_idx]:
+                    print(f"  ✗ {ball_names[ball_idx]} 아직 테이블 위 — 다음 shot에서 재평가")
+
+            movej_both(HOME_Q_DEG, wait=True)
+            time.sleep(1)
 
         pocketed_count = sum(balls_pocketed)
         print(f"\n  === PHASE 1 결과: {pocketed_count}/{len(ball_names)} 포켓 성공 ===")
