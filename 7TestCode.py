@@ -231,42 +231,42 @@ import pybullet as p
 robot_id = pb.my_robot.robotId
 ee_link = pb.my_robot.RobotEEJointIdx[-1]
 
-if DEMO_TYPE == 'minigolf':
-    from project.environment.minigolf_env import MiniGolfEnvironment
-    from project.physics.shot_planner import MinigolfShotPlanner
-    env = MiniGolfEnvironment(pb.ClientId)
-    env.setup(ball_pos=[0.45, -0.10, 0.035], hole_pos=[0.55, 0.12, 0.005])
-    env.disable_robot_env_collision(robot_id)
-    env.attach_compact_tool(robot_id, ee_link)
-    env.disable_tool_env_collision()
-    tool_offset = TOOL_HEAD_LENGTH + MINIGOLF_BALL_RADIUS
-    shot_planner = MinigolfShotPlanner()
-    perception = None
-elif DEMO_TYPE == 'maze':
-    from project.environment.maze_env import MazeEnvironment
-    from project.physics.cushion_planner import CushionShotPlanner
-    from project.perception import SimPerception
-    from project.real_env_to_pybullet import detect_balls, load_position_offset
-    _pos_offset = load_position_offset()
-    env = MazeEnvironment(pb.ClientId)
-    CY, W = MAZE_TABLE_CENTER_Y, MAZE_TABLE_WIDTH
-    H, TH = MAZE_TABLE_SURFACE_HEIGHT, MAZE_TABLE_HEIGHT
-    ball_h = H + TH/2 + MAZE_BALL_RADIUS + 0.001
-    cue_pos, target_pos, ball2_pos = detect_balls()
-    env.setup(
-        cue_pos=cue_pos,
-        target_pos=target_pos,
-        ball2_pos=ball2_pos,
-        num_obstacles=0,  # 순수 쓰리쿠션 (장애물 없음)
-        position_offset=_pos_offset,
-    )
-    env.disable_robot_env_collision(robot_id)
-    env.attach_compact_tool(robot_id, ee_link)
-    env.disable_tool_env_collision()
-    tool_offset = MAZE_BALL_RADIUS  # 큐팁이 공 표면에 닿도록 (ㄴ자 오프셋은 planner 내부 처리)
-    shot_planner = CushionShotPlanner(table_bounds=env.table_bounds)
-    perception = SimPerception(env)
-elif DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
+# if DEMO_TYPE == 'minigolf':
+#     from project.environment.minigolf_env import MiniGolfEnvironment
+#     from project.physics.shot_planner import MinigolfShotPlanner
+#     env = MiniGolfEnvironment(pb.ClientId)
+#     env.setup(ball_pos=[0.45, -0.10, 0.035], hole_pos=[0.55, 0.12, 0.005])
+#     env.disable_robot_env_collision(robot_id)
+#     env.attach_compact_tool(robot_id, ee_link)
+#     env.disable_tool_env_collision()
+#     tool_offset = TOOL_HEAD_LENGTH + MINIGOLF_BALL_RADIUS
+#     shot_planner = MinigolfShotPlanner()
+#     perception = None
+# elif DEMO_TYPE == 'maze':
+#     from project.environment.maze_env import MazeEnvironment
+#     from project.physics.cushion_planner import CushionShotPlanner
+#     from project.perception import SimPerception
+#     from project.real_env_to_pybullet import detect_balls, load_position_offset
+#     _pos_offset = load_position_offset()
+#     env = MazeEnvironment(pb.ClientId)
+#     CY, W = MAZE_TABLE_CENTER_Y, MAZE_TABLE_WIDTH
+#     H, TH = MAZE_TABLE_SURFACE_HEIGHT, MAZE_TABLE_HEIGHT
+#     ball_h = H + TH/2 + MAZE_BALL_RADIUS + 0.001
+#     cue_pos, target_pos, ball2_pos = detect_balls()
+#     env.setup(
+#         cue_pos=cue_pos,
+#         target_pos=target_pos,
+#         ball2_pos=ball2_pos,
+#         num_obstacles=0,  # 순수 쓰리쿠션 (장애물 없음)
+#         position_offset=_pos_offset,
+#     )
+#     env.disable_robot_env_collision(robot_id)
+#     env.attach_compact_tool(robot_id, ee_link)
+#     env.disable_tool_env_collision()
+#     tool_offset = MAZE_BALL_RADIUS  # 큐팁이 공 표면에 닿도록 (ㄴ자 오프셋은 planner 내부 처리)
+#     shot_planner = CushionShotPlanner(table_bounds=env.table_bounds)
+#     perception = SimPerception(env)
+if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
     from project.environment.maze_env import MazeEnvironment
     from project.physics.pocket_planner import PocketShotPlanner
     from project.real_env_to_pybullet import detect_balls, load_position_offset
@@ -323,20 +323,20 @@ elif DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
     tool_offset = TOOL_HEAD_LENGTH + MAZE_BALL_RADIUS
     shot_planner = PocketShotPlanner(table_bounds=env.table_bounds)
     perception = None
-else:  # billiards
-    from project.environment.billiards_env import BilliardsEnvironment
-    from project.physics.shot_planner import BilliardsShotPlanner
-    env = BilliardsEnvironment(pb.ClientId)
-    CY, W = BILLIARD_TABLE_CENTER_Y, BILLIARD_TABLE_WIDTH
-    H, TH = BILLIARD_TABLE_SURFACE_HEIGHT, BILLIARD_TABLE_HEIGHT
-    ball_h = H + TH/2 + BILLIARD_BALL_RADIUS + 0.001
-    env.setup(cue_pos=[0.5, CY-W/4, ball_h], target_pos=[0.5, CY+W/8, ball_h])
-    env.disable_robot_env_collision(robot_id)
-    env.attach_compact_tool(robot_id, ee_link)
-    env.disable_tool_env_collision()
-    tool_offset = TOOL_HEAD_LENGTH + BILLIARD_BALL_RADIUS
-    shot_planner = BilliardsShotPlanner()
-    perception = None
+# else:  # billiards
+#     from project.environment.billiards_env import BilliardsEnvironment
+#     from project.physics.shot_planner import BilliardsShotPlanner
+#     env = BilliardsEnvironment(pb.ClientId)
+#     CY, W = BILLIARD_TABLE_CENTER_Y, BILLIARD_TABLE_WIDTH
+#     H, TH = BILLIARD_TABLE_SURFACE_HEIGHT, BILLIARD_TABLE_HEIGHT
+#     ball_h = H + TH/2 + BILLIARD_BALL_RADIUS + 0.001
+#     env.setup(cue_pos=[0.5, CY-W/4, ball_h], target_pos=[0.5, CY+W/8, ball_h])
+#     env.disable_robot_env_collision(robot_id)
+#     env.attach_compact_tool(robot_id, ee_link)
+#     env.disable_tool_env_collision()
+#     tool_offset = TOOL_HEAD_LENGTH + BILLIARD_BALL_RADIUS
+#     shot_planner = BilliardsShotPlanner()
+#     perception = None
 
 # PD 게인 강화
 robot = pb.my_robot
@@ -853,319 +853,319 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
 if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
     NUM_ROUNDS = 0  # pocket은 state_machine으로 이미 처리됨
 
-for rnd in range(1, NUM_ROUNDS + 1):
-    print(f"\n{'='*50}")
-    print(f"  SIM Round {rnd}/{NUM_ROUNDS}")
-    print(f"{'='*50}")
+# for rnd in range(1, NUM_ROUNDS + 1):
+#     print(f"\n{'='*50}")
+#     print(f"  SIM Round {rnd}/{NUM_ROUNDS}")
+#     print(f"{'='*50}")
 
-    # --- SCAN ---
-    if DEMO_TYPE == 'minigolf':
-        ball_pos = env.get_ball_position()
-        print(f"  공: {ball_pos}, 홀: {env.hole_pos}")
-    elif DEMO_TYPE == 'maze':
-        scan = perception.scan_environment()
-        ball_pos = scan['cue_pos']
-        target_pos = scan['target_pos']
-        ball2_pos = scan.get('ball2_pos')
-        obstacles = scan.get('obstacles', [])
-        print(f"  큐볼: {ball_pos[:2]}, 목표1: {target_pos[:2]}, 목표2: {ball2_pos[:2] if ball2_pos is not None else 'N/A'}")
-        if np.linalg.norm(ball_pos[:2]) > 0.80:
-            print(f"  큐볼 범위 밖 -> 리셋")
-            env.reset_balls(cue_pos=env.cue_start_pos)
-            time.sleep(0.5)
-            ball_pos = env.get_cue_ball_position()
-    else:
-        ball_pos = env.get_cue_ball_position()
-        target_pos = env.get_target_ball_position()
-        print(f"  큐볼: {ball_pos[:2]}, 목표공: {target_pos[:2]}")
-        if np.linalg.norm(ball_pos[:2]) > 0.80:
-            print(f"  큐볼 범위 밖 -> 리셋")
-            env.reset_balls(cue_pos=env.cue_start_pos)
-            time.sleep(0.5)
-            ball_pos = env.get_cue_ball_position()
+#     # --- SCAN ---
+#     if DEMO_TYPE == 'minigolf':
+#         ball_pos = env.get_ball_position()
+#         print(f"  공: {ball_pos}, 홀: {env.hole_pos}")
+#     elif DEMO_TYPE == 'maze':
+#         scan = perception.scan_environment()
+#         ball_pos = scan['cue_pos']
+#         target_pos = scan['target_pos']
+#         ball2_pos = scan.get('ball2_pos')
+#         obstacles = scan.get('obstacles', [])
+#         print(f"  큐볼: {ball_pos[:2]}, 목표1: {target_pos[:2]}, 목표2: {ball2_pos[:2] if ball2_pos is not None else 'N/A'}")
+#         if np.linalg.norm(ball_pos[:2]) > 0.80:
+#             print(f"  큐볼 범위 밖 -> 리셋")
+#             env.reset_balls(cue_pos=env.cue_start_pos)
+#             time.sleep(0.5)
+#             ball_pos = env.get_cue_ball_position()
+#     else:
+#         ball_pos = env.get_cue_ball_position()
+#         target_pos = env.get_target_ball_position()
+#         print(f"  큐볼: {ball_pos[:2]}, 목표공: {target_pos[:2]}")
+#         if np.linalg.norm(ball_pos[:2]) > 0.80:
+#             print(f"  큐볼 범위 밖 -> 리셋")
+#             env.reset_balls(cue_pos=env.cue_start_pos)
+#             time.sleep(0.5)
+#             ball_pos = env.get_cue_ball_position()
 
-    # --- THINK ---
-    if DEMO_TYPE == 'minigolf':
-        terrain_path = getattr(env, 'terrain_obj_path', None)
-        if terrain_path:
-            print(f"  Grid Search 실행 중...")
-            strike_dir, speed = shot_planner.plan_shot_physics_search(
-                ball_pos, env.hole_pos, terrain_path, env.terrain_offset)
-        else:
-            strike_dir, speed = shot_planner.plan_shot(ball_pos, env.hole_pos)
-        strike_dir_3d = np.array(strike_dir).flatten()
-    elif DEMO_TYPE == 'maze':
-        print(f"  Headless 3D 탐색 중...")
-        candidates = shot_planner.plan_shot(ball_pos, target_pos, obstacles, ball2_pos=ball2_pos)
-        # saveState 검증에서 사용할 변수 (아래 실행 섹션에서 처리)
-        speed = candidates[0]['strike_speed'] if candidates else 1.0
-        strike_dir_3d = None  # maze는 아래에서 후보별 처리
-    else:
-        result = shot_planner.find_best_pocket_shot(
-            ball_pos, target_pos, env.pocket_positions)
-        strike_dir, speed = result['strike_dir'], result['strike_speed']
-        angle_rad = np.radians(BILLIARD_STRIKE_ANGLE_DEG)
-        horiz = np.array(strike_dir[:2]).flatten()
-        horiz = horiz / np.linalg.norm(horiz)
-        strike_dir_3d = np.array([
-            horiz[0]*np.cos(angle_rad), horiz[1]*np.cos(angle_rad), -np.sin(angle_rad)])
-        strike_dir_3d /= np.linalg.norm(strike_dir_3d)
+#     # --- THINK ---
+#     if DEMO_TYPE == 'minigolf':
+#         terrain_path = getattr(env, 'terrain_obj_path', None)
+#         if terrain_path:
+#             print(f"  Grid Search 실행 중...")
+#             strike_dir, speed = shot_planner.plan_shot_physics_search(
+#                 ball_pos, env.hole_pos, terrain_path, env.terrain_offset)
+#         else:
+#             strike_dir, speed = shot_planner.plan_shot(ball_pos, env.hole_pos)
+#         strike_dir_3d = np.array(strike_dir).flatten()
+#     elif DEMO_TYPE == 'maze':
+#         print(f"  Headless 3D 탐색 중...")
+#         candidates = shot_planner.plan_shot(ball_pos, target_pos, obstacles, ball2_pos=ball2_pos)
+#         # saveState 검증에서 사용할 변수 (아래 실행 섹션에서 처리)
+#         speed = candidates[0]['strike_speed'] if candidates else 1.0
+#         strike_dir_3d = None  # maze는 아래에서 후보별 처리
+#     else:
+#         result = shot_planner.find_best_pocket_shot(
+#             ball_pos, target_pos, env.pocket_positions)
+#         strike_dir, speed = result['strike_dir'], result['strike_speed']
+#         angle_rad = np.radians(BILLIARD_STRIKE_ANGLE_DEG)
+#         horiz = np.array(strike_dir[:2]).flatten()
+#         horiz = horiz / np.linalg.norm(horiz)
+#         strike_dir_3d = np.array([
+#             horiz[0]*np.cos(angle_rad), horiz[1]*np.cos(angle_rad), -np.sin(angle_rad)])
+#         strike_dir_3d /= np.linalg.norm(strike_dir_3d)
 
-    # --- 궤적 생성 + SIM 실행 ---
-    T_now = pb.my_robot.pinModel.FK(pb.my_robot.q)
-    q_now = pb.my_robot.q.copy()
+#     # --- 궤적 생성 + SIM 실행 ---
+#     T_now = pb.my_robot.pinModel.FK(pb.my_robot.q)
+#     q_now = pb.my_robot.q.copy()
 
-    if DEMO_TYPE == 'maze':
-        # === saveState 기반 검증 (state_machine.py와 동일) ===
-        MAX_VERIFY = 5
-        ik_valid_list = []
-        angle_rad = np.radians(MAZE_STRIKE_ANGLE_DEG)
+#     if DEMO_TYPE == 'maze':
+#         # === saveState 기반 검증 (state_machine.py와 동일) ===
+#         MAX_VERIFY = 5
+#         ik_valid_list = []
+#         angle_rad = np.radians(MAZE_STRIKE_ANGLE_DEG)
 
-        for ci, cand in enumerate(candidates):
-            if len(ik_valid_list) >= MAX_VERIFY:
-                break
-            sd2d = cand['strike_dir']
-            horiz = np.array(sd2d[:2]).flatten()
-            hn = np.linalg.norm(horiz)
-            if hn > 1e-6:
-                horiz = horiz / hn
-            sd3d = np.array([horiz[0]*np.cos(angle_rad), horiz[1]*np.cos(angle_rad), -np.sin(angle_rad)])
-            sd3d = sd3d / np.linalg.norm(sd3d)
+#         for ci, cand in enumerate(candidates):
+#             if len(ik_valid_list) >= MAX_VERIFY:
+#                 break
+#             sd2d = cand['strike_dir']
+#             horiz = np.array(sd2d[:2]).flatten()
+#             hn = np.linalg.norm(horiz)
+#             if hn > 1e-6:
+#                 horiz = horiz / hn
+#             sd3d = np.array([horiz[0]*np.cos(angle_rad), horiz[1]*np.cos(angle_rad), -np.sin(angle_rad)])
+#             sd3d = sd3d / np.linalg.norm(sd3d)
 
-            traj_c, ph_c = traj_planner.plan_strike(
-                T_current=T_now, ball_pos=ball_pos, strike_direction=sd3d,
-                strike_speed=cand['strike_speed'],
-                approach_dist=cand.get('safe_approach_dist', STRIKE_APPROACH_DIST),
-                follow_dist=STRIKE_FOLLOW_DIST, strike_height=ball_pos[2],
-                tool_offset=tool_offset,
-                table_bounds=env.table_bounds if hasattr(env, 'table_bounds') else None)
+#             traj_c, ph_c = traj_planner.plan_strike(
+#                 T_current=T_now, ball_pos=ball_pos, strike_direction=sd3d,
+#                 strike_speed=cand['strike_speed'],
+#                 approach_dist=cand.get('safe_approach_dist', STRIKE_APPROACH_DIST),
+#                 follow_dist=STRIKE_FOLLOW_DIST, strike_height=ball_pos[2],
+#                 tool_offset=tool_offset,
+#                 table_bounds=env.table_bounds if hasattr(env, 'table_bounds') else None)
 
-            approach_end = ph_c.get('approach', (0, 0))[1]
-            val_from = int(approach_end * 0.65)
-            ik_result = ik.solve_trajectory_validated(q_now, traj_c, validate_from=val_from)
-            if ik_result['valid']:
-                print(f"  [IK-OK] #{ci+1}/{len(candidates)} "
-                      f"(angle={cand['angle_deg']:.1f}, score={cand['score']:.0f})")
-                ik_valid_list.append((cand, ik_result, traj_c, ph_c, sd3d.copy()))
-            else:
-                print(f"  [SKIP] #{ci+1} (angle={cand['angle_deg']:.1f}): IK failed")
+#             approach_end = ph_c.get('approach', (0, 0))[1]
+#             val_from = int(approach_end * 0.65)
+#             ik_result = ik.solve_trajectory_validated(q_now, traj_c, validate_from=val_from)
+#             if ik_result['valid']:
+#                 print(f"  [IK-OK] #{ci+1}/{len(candidates)} "
+#                       f"(angle={cand['angle_deg']:.1f}, score={cand['score']:.0f})")
+#                 ik_valid_list.append((cand, ik_result, traj_c, ph_c, sd3d.copy()))
+#             else:
+#                 print(f"  [SKIP] #{ci+1} (angle={cand['angle_deg']:.1f}): IK failed")
 
-        if not ik_valid_list:
-            print(f"  [FAIL] All candidates failed IK. Skipping round.")
-            pb.MoveRobot(HOME_Q_DEG, degree=True)
-            time.sleep(1)
-            continue
+#         if not ik_valid_list:
+#             print(f"  [FAIL] All candidates failed IK. Skipping round.")
+#             pb.MoveRobot(HOME_Q_DEG, degree=True)
+#             time.sleep(1)
+#             continue
 
-        use_verify = len(ik_valid_list) > 1
-        if use_verify:
-            print(f"  [VERIFY] Testing {len(ik_valid_list)} candidates via saveState...")
+#         use_verify = len(ik_valid_list) > 1
+#         if use_verify:
+#             print(f"  [VERIFY] Testing {len(ik_valid_list)} candidates via saveState...")
 
-        # 접촉 추적 리셋 함수
-        def _reset_tracking():
-            if hasattr(env, 'reset_contact_tracking'):
-                env.reset_contact_tracking()
-            if hasattr(env, 'tool_id') and hasattr(env, 'cue_ball_id'):
-                p.setCollisionFilterPair(env.tool_id, env.cue_ball_id, -1, -1,
-                                         enableCollision=1, physicsClientId=pb.ClientId)
+#         # 접촉 추적 리셋 함수
+#         def _reset_tracking():
+#             if hasattr(env, 'reset_contact_tracking'):
+#                 env.reset_contact_tracking()
+#             if hasattr(env, 'tool_id') and hasattr(env, 'cue_ball_id'):
+#                 p.setCollisionFilterPair(env.tool_id, env.cue_ball_id, -1, -1,
+#                                          enableCollision=1, physicsClientId=pb.ClientId)
 
-        verified_idx = None
-        for vi, (cand, ik_res, traj_v, ph_v, sd3d_v) in enumerate(ik_valid_list):
-            is_last = (vi == len(ik_valid_list) - 1)
-            if use_verify and not is_last:
-                state_id = p.saveState(physicsClientId=pb.ClientId)
-                _reset_tracking()
+#         verified_idx = None
+#         for vi, (cand, ik_res, traj_v, ph_v, sd3d_v) in enumerate(ik_valid_list):
+#             is_last = (vi == len(ik_valid_list) - 1)
+#             if use_verify and not is_last:
+#                 state_id = p.saveState(physicsClientId=pb.ClientId)
+#                 _reset_tracking()
 
-                # Approach
-                for i in range(ph_v['approach'][0], ph_v['approach'][1]):
-                    pb.MoveRobot(ik_res['q_trajectory'][i], degree=False)
-                    time.sleep(0.002)
-                time.sleep(0.3)
+#                 # Approach
+#                 for i in range(ph_v['approach'][0], ph_v['approach'][1]):
+#                     pb.MoveRobot(ik_res['q_trajectory'][i], degree=False)
+#                     time.sleep(0.002)
+#                 time.sleep(0.3)
 
-                # Strike swing
-                q_ready_v = ik_res['q_trajectory'][ph_v['approach'][1] - 1].copy()
-                q_follow_v = ik.solve_step(q_ready_v, traj_v[-1])
-                sw_t = np.linalg.norm(traj_v[-1][:3,3] - traj_v[ph_v['approach'][1]-1][:3,3]) / (cand['strike_speed'] * 0.7)
-                sw_t = np.clip(sw_t, 0.05, 0.8)
-                avg_qd = (q_follow_v - q_ready_v) / sw_t
-                if hasattr(pb.my_robot, '_qdot_des'):
-                    pb.my_robot._qdot_des = avg_qd
-                pb.MoveRobot(q_follow_v, degree=False)
-                time.sleep(sw_t)
-                if hasattr(pb.my_robot, '_qdot_des'):
-                    pb.my_robot._qdot_des = np.zeros([6, 1])
+#                 # Strike swing
+#                 q_ready_v = ik_res['q_trajectory'][ph_v['approach'][1] - 1].copy()
+#                 q_follow_v = ik.solve_step(q_ready_v, traj_v[-1])
+#                 sw_t = np.linalg.norm(traj_v[-1][:3,3] - traj_v[ph_v['approach'][1]-1][:3,3]) / (cand['strike_speed'] * 0.7)
+#                 sw_t = np.clip(sw_t, 0.05, 0.8)
+#                 avg_qd = (q_follow_v - q_ready_v) / sw_t
+#                 if hasattr(pb.my_robot, '_qdot_des'):
+#                     pb.my_robot._qdot_des = avg_qd
+#                 pb.MoveRobot(q_follow_v, degree=False)
+#                 time.sleep(sw_t)
+#                 if hasattr(pb.my_robot, '_qdot_des'):
+#                     pb.my_robot._qdot_des = np.zeros([6, 1])
 
-                # 도구-큐볼 충돌 비활성화 (공이 자유롭게 이동)
-                if hasattr(env, 'tool_id') and hasattr(env, 'cue_ball_id'):
-                    p.setCollisionFilterPair(env.tool_id, env.cue_ball_id, -1, -1,
-                                             enableCollision=0, physicsClientId=pb.ClientId)
+#                 # 도구-큐볼 충돌 비활성화 (공이 자유롭게 이동)
+#                 if hasattr(env, 'tool_id') and hasattr(env, 'cue_ball_id'):
+#                     p.setCollisionFilterPair(env.tool_id, env.cue_ball_id, -1, -1,
+#                                              enableCollision=0, physicsClientId=pb.ClientId)
 
-                # 수직 후퇴
-                T_lift_v = traj_v[-1].copy()
-                T_lift_v[2, 3] += RETRACT_HEIGHT
-                q_lift_v = ik.solve_step(q_follow_v, T_lift_v)
-                pb.MoveRobot(q_lift_v, degree=False)
-                time.sleep(0.3)
+#                 # 수직 후퇴
+#                 T_lift_v = traj_v[-1].copy()
+#                 T_lift_v[2, 3] += RETRACT_HEIGHT
+#                 q_lift_v = ik.solve_step(q_follow_v, T_lift_v)
+#                 pb.MoveRobot(q_lift_v, degree=False)
+#                 time.sleep(0.3)
 
-                # 공 정지 대기 + 결과 확인
-                env.wait_balls_stop(timeout=8.0)
-                events = getattr(env, '_contact_events', [])
-                from project.physics.cushion_rules import valid_cushion_sequence
-                valid_shot = valid_cushion_sequence(events, 2)
+#                 # 공 정지 대기 + 결과 확인
+#                 env.wait_balls_stop(timeout=8.0)
+#                 events = getattr(env, '_contact_events', [])
+#                 from project.physics.cushion_rules import valid_cushion_sequence
+#                 valid_shot = valid_cushion_sequence(events, 2)
 
-                if valid_shot:
-                    print(f"    [V#{vi+1}] OK angle={cand['angle_deg']:.1f} events={events}")
-                    p.removeState(state_id, physicsClientId=pb.ClientId)
-                    verified_idx = vi
-                    # 궤적 저장 (이미 실행 완료된 상태)
-                    q_traj_full = ik_res['q_trajectory']
-                    q_traj_deg = np.degrees(np.array(q_traj_full).reshape(-1, 6))
-                    q_follow_deg = np.degrees(np.array(q_follow_v).flatten())
-                    saved_trajectories.append((q_traj_deg, q_follow_deg, ph_v))
-                    break
-                else:
-                    print(f"    [V#{vi+1}] MISS angle={cand['angle_deg']:.1f} events={events}")
-                    p.restoreState(stateId=state_id, physicsClientId=pb.ClientId)
-                    p.removeState(state_id, physicsClientId=pb.ClientId)
-                    pb.MoveRobot(HOME_Q_DEG, degree=True)
-                    time.sleep(0.3)
-            else:
-                # 마지막 후보 또는 단일 후보 -> fallback 실행
-                verified_idx = vi
-                break
+#                 if valid_shot:
+#                     print(f"    [V#{vi+1}] OK angle={cand['angle_deg']:.1f} events={events}")
+#                     p.removeState(state_id, physicsClientId=pb.ClientId)
+#                     verified_idx = vi
+#                     # 궤적 저장 (이미 실행 완료된 상태)
+#                     q_traj_full = ik_res['q_trajectory']
+#                     q_traj_deg = np.degrees(np.array(q_traj_full).reshape(-1, 6))
+#                     q_follow_deg = np.degrees(np.array(q_follow_v).flatten())
+#                     saved_trajectories.append((q_traj_deg, q_follow_deg, ph_v))
+#                     break
+#                 else:
+#                     print(f"    [V#{vi+1}] MISS angle={cand['angle_deg']:.1f} events={events}")
+#                     p.restoreState(stateId=state_id, physicsClientId=pb.ClientId)
+#                     p.removeState(state_id, physicsClientId=pb.ClientId)
+#                     pb.MoveRobot(HOME_Q_DEG, degree=True)
+#                     time.sleep(0.3)
+#             else:
+#                 # 마지막 후보 또는 단일 후보 -> fallback 실행
+#                 verified_idx = vi
+#                 break
 
-        if verified_idx is not None and (not use_verify or verified_idx == len(ik_valid_list) - 1):
-            # 최종 후보를 직접 실행 (saveState 없이)
-            cand_f, ik_res_f, traj_f, ph_f, sd3d_f = ik_valid_list[verified_idx]
-            _reset_tracking()
+#         if verified_idx is not None and (not use_verify or verified_idx == len(ik_valid_list) - 1):
+#             # 최종 후보를 직접 실행 (saveState 없이)
+#             cand_f, ik_res_f, traj_f, ph_f, sd3d_f = ik_valid_list[verified_idx]
+#             _reset_tracking()
 
-            print(f"  [SELECTED] #{verified_idx+1}/{len(ik_valid_list)} "
-                  f"angle={cand_f['angle_deg']:.1f}, score={cand_f['score']:.0f}")
-            print(f"  방향: {sd3d_f}, 속도: {cand_f['strike_speed']:.3f} m/s")
+#             print(f"  [SELECTED] #{verified_idx+1}/{len(ik_valid_list)} "
+#                   f"angle={cand_f['angle_deg']:.1f}, score={cand_f['score']:.0f}")
+#             print(f"  방향: {sd3d_f}, 속도: {cand_f['strike_speed']:.3f} m/s")
 
-            # Approach
-            print(f"  [SIM] Approach...")
-            for i in range(ph_f['approach'][0], ph_f['approach'][1]):
-                pb.MoveRobot(ik_res_f['q_trajectory'][i], degree=False)
-                time.sleep(0.002)
-            q_ready_f = ik_res_f['q_trajectory'][ph_f['approach'][1] - 1].copy()
-            time.sleep(0.5)
+#             # Approach
+#             print(f"  [SIM] Approach...")
+#             for i in range(ph_f['approach'][0], ph_f['approach'][1]):
+#                 pb.MoveRobot(ik_res_f['q_trajectory'][i], degree=False)
+#                 time.sleep(0.002)
+#             q_ready_f = ik_res_f['q_trajectory'][ph_f['approach'][1] - 1].copy()
+#             time.sleep(0.5)
 
-            # Strike
-            print(f"  [SIM] Strike!")
-            q_follow_f = ik.solve_step(q_ready_f, traj_f[-1])
-            sw_t = np.linalg.norm(traj_f[-1][:3,3] - traj_f[ph_f['approach'][1]-1][:3,3]) / (cand_f['strike_speed'] * 0.7)
-            sw_t = np.clip(sw_t, 0.05, 0.8)
-            avg_qd = (q_follow_f - q_ready_f) / sw_t
-            if hasattr(pb.my_robot, '_qdot_des'):
-                pb.my_robot._qdot_des = avg_qd
-            pb.MoveRobot(q_follow_f, degree=False)
-            time.sleep(sw_t)
-            if hasattr(pb.my_robot, '_qdot_des'):
-                pb.my_robot._qdot_des = np.zeros([6, 1])
+#             # Strike
+#             print(f"  [SIM] Strike!")
+#             q_follow_f = ik.solve_step(q_ready_f, traj_f[-1])
+#             sw_t = np.linalg.norm(traj_f[-1][:3,3] - traj_f[ph_f['approach'][1]-1][:3,3]) / (cand_f['strike_speed'] * 0.7)
+#             sw_t = np.clip(sw_t, 0.05, 0.8)
+#             avg_qd = (q_follow_f - q_ready_f) / sw_t
+#             if hasattr(pb.my_robot, '_qdot_des'):
+#                 pb.my_robot._qdot_des = avg_qd
+#             pb.MoveRobot(q_follow_f, degree=False)
+#             time.sleep(sw_t)
+#             if hasattr(pb.my_robot, '_qdot_des'):
+#                 pb.my_robot._qdot_des = np.zeros([6, 1])
 
-            # 도구-큐볼 충돌 비활성화
-            if hasattr(env, 'tool_id') and hasattr(env, 'cue_ball_id'):
-                p.setCollisionFilterPair(env.tool_id, env.cue_ball_id, -1, -1,
-                                         enableCollision=0, physicsClientId=pb.ClientId)
+#             # 도구-큐볼 충돌 비활성화
+#             if hasattr(env, 'tool_id') and hasattr(env, 'cue_ball_id'):
+#                 p.setCollisionFilterPair(env.tool_id, env.cue_ball_id, -1, -1,
+#                                          enableCollision=0, physicsClientId=pb.ClientId)
 
-            # 수직 후퇴
-            T_lift_f = traj_f[-1].copy()
-            T_lift_f[2, 3] += RETRACT_HEIGHT
-            q_lift_f = ik.solve_step(q_follow_f, T_lift_f)
-            pb.MoveRobot(q_lift_f, degree=False)
-            time.sleep(0.3)
+#             # 수직 후퇴
+#             T_lift_f = traj_f[-1].copy()
+#             T_lift_f[2, 3] += RETRACT_HEIGHT
+#             q_lift_f = ik.solve_step(q_follow_f, T_lift_f)
+#             pb.MoveRobot(q_lift_f, degree=False)
+#             time.sleep(0.3)
 
-            # 궤적 저장
-            q_traj_full = ik_res_f['q_trajectory']
-            q_traj_deg = np.degrees(np.array(q_traj_full).reshape(-1, 6))
-            q_follow_deg = np.degrees(np.array(q_follow_f).flatten())
-            saved_trajectories.append((q_traj_deg, q_follow_deg, ph_f))
-        elif verified_idx is not None:
-            # saveState 검증에서 이미 성공+저장 완료됨
-            cand_f = ik_valid_list[verified_idx][0]
-            print(f"  [SELECTED] #{verified_idx+1}/{len(ik_valid_list)} "
-                  f"angle={cand_f['angle_deg']:.1f}, score={cand_f['score']:.0f} (verified)")
+#             # 궤적 저장
+#             q_traj_full = ik_res_f['q_trajectory']
+#             q_traj_deg = np.degrees(np.array(q_traj_full).reshape(-1, 6))
+#             q_follow_deg = np.degrees(np.array(q_follow_f).flatten())
+#             saved_trajectories.append((q_traj_deg, q_follow_deg, ph_f))
+#         elif verified_idx is not None:
+#             # saveState 검증에서 이미 성공+저장 완료됨
+#             cand_f = ik_valid_list[verified_idx][0]
+#             print(f"  [SELECTED] #{verified_idx+1}/{len(ik_valid_list)} "
+#                   f"angle={cand_f['angle_deg']:.1f}, score={cand_f['score']:.0f} (verified)")
 
-        # OBSERVE (maze)
-        env.wait_balls_stop(timeout=5.0)
-        cue_pos_f = env.get_cue_ball_position()
-        t1_pos = env.get_target_ball_position()
-        d1 = np.linalg.norm(cue_pos_f[:2] - t1_pos[:2])
-        d2 = 0
-        if hasattr(env, 'ball2_id'):
-            t2_pos = env.get_ball2_position()
-            d2 = np.linalg.norm(cue_pos_f[:2] - t2_pos[:2])
-        events = getattr(env, '_contact_events', [])
-        from project.physics.cushion_rules import valid_cushion_sequence
-        valid_shot = valid_cushion_sequence(events, 2)
-        print(f"  결과: d(tgt1)={d1:.3f}m, d(tgt2)={d2:.3f}m, "
-              f"events={events}, valid={'YES' if valid_shot else 'NO'}")
-    else:
-        # minigolf / billiards: 기존 로직
-        print(f"  방향: {strike_dir_3d}, 속도: {speed:.3f} m/s")
+#         # OBSERVE (maze)
+#         env.wait_balls_stop(timeout=5.0)
+#         cue_pos_f = env.get_cue_ball_position()
+#         t1_pos = env.get_target_ball_position()
+#         d1 = np.linalg.norm(cue_pos_f[:2] - t1_pos[:2])
+#         d2 = 0
+#         if hasattr(env, 'ball2_id'):
+#             t2_pos = env.get_ball2_position()
+#             d2 = np.linalg.norm(cue_pos_f[:2] - t2_pos[:2])
+#         events = getattr(env, '_contact_events', [])
+#         from project.physics.cushion_rules import valid_cushion_sequence
+#         valid_shot = valid_cushion_sequence(events, 2)
+#         print(f"  결과: d(tgt1)={d1:.3f}m, d(tgt2)={d2:.3f}m, "
+#               f"events={events}, valid={'YES' if valid_shot else 'NO'}")
+#     else:
+#         # minigolf / billiards: 기존 로직
+#         print(f"  방향: {strike_dir_3d}, 속도: {speed:.3f} m/s")
 
-        trajectory, phases = traj_planner.plan_strike(
-            T_current=T_now, ball_pos=ball_pos, strike_direction=strike_dir_3d,
-            strike_speed=speed, approach_dist=STRIKE_APPROACH_DIST,
-            follow_dist=STRIKE_FOLLOW_DIST,
-            strike_height=ball_pos[2], tool_offset=tool_offset,
-            table_bounds=env.table_bounds if hasattr(env, 'table_bounds') else None)
+#         trajectory, phases = traj_planner.plan_strike(
+#             T_current=T_now, ball_pos=ball_pos, strike_direction=strike_dir_3d,
+#             strike_speed=speed, approach_dist=STRIKE_APPROACH_DIST,
+#             follow_dist=STRIKE_FOLLOW_DIST,
+#             strike_height=ball_pos[2], tool_offset=tool_offset,
+#             table_bounds=env.table_bounds if hasattr(env, 'table_bounds') else None)
 
-        q_traj = ik.solve_trajectory(q_now, trajectory)
-        print(f"  궤적: {len(trajectory)} pts (A:{phases['approach'][1]-phases['approach'][0]}"
-              f" S:{phases['strike'][1]-phases['strike'][0]}"
-              f" F:{phases['follow'][1]-phases['follow'][0]})")
+#         q_traj = ik.solve_trajectory(q_now, trajectory)
+#         print(f"  궤적: {len(trajectory)} pts (A:{phases['approach'][1]-phases['approach'][0]}"
+#               f" S:{phases['strike'][1]-phases['strike'][0]}"
+#               f" F:{phases['follow'][1]-phases['follow'][0]})")
 
-        # SIM: Approach
-        if hasattr(env, 'tool_id') and hasattr(env, 'cue_ball_id'):
-            p.setCollisionFilterPair(env.tool_id, env.cue_ball_id, -1, -1,
-                                     enableCollision=1, physicsClientId=pb.ClientId)
-        print(f"  [SIM] Approach...")
-        for i in range(phases['approach'][0], phases['approach'][1]):
-            pb.MoveRobot(q_traj[i], degree=False)
-            time.sleep(0.002)
-        q_ready = q_traj[phases['approach'][1] - 1].copy()
-        time.sleep(0.5)
+#         # SIM: Approach
+#         if hasattr(env, 'tool_id') and hasattr(env, 'cue_ball_id'):
+#             p.setCollisionFilterPair(env.tool_id, env.cue_ball_id, -1, -1,
+#                                      enableCollision=1, physicsClientId=pb.ClientId)
+#         print(f"  [SIM] Approach...")
+#         for i in range(phases['approach'][0], phases['approach'][1]):
+#             pb.MoveRobot(q_traj[i], degree=False)
+#             time.sleep(0.002)
+#         q_ready = q_traj[phases['approach'][1] - 1].copy()
+#         time.sleep(0.5)
 
-        # SIM: Strike
-        print(f"  [SIM] Strike!")
-        q_follow = ik.solve_step(q_ready, trajectory[-1])
-        swing_t = np.linalg.norm(trajectory[-1][:3,3] - trajectory[phases['approach'][1]-1][:3,3]) / (speed * 0.7)
-        swing_t = np.clip(swing_t, 0.05, 0.8)
-        avg_qdot = (q_follow - q_ready) / swing_t
-        if hasattr(pb.my_robot, '_qdot_des'):
-            pb.my_robot._qdot_des = avg_qdot
-        pb.MoveRobot(q_follow, degree=False)
-        time.sleep(swing_t)
-        if hasattr(pb.my_robot, '_qdot_des'):
-            pb.my_robot._qdot_des = np.zeros([6, 1])
+#         # SIM: Strike
+#         print(f"  [SIM] Strike!")
+#         q_follow = ik.solve_step(q_ready, trajectory[-1])
+#         swing_t = np.linalg.norm(trajectory[-1][:3,3] - trajectory[phases['approach'][1]-1][:3,3]) / (speed * 0.7)
+#         swing_t = np.clip(swing_t, 0.05, 0.8)
+#         avg_qdot = (q_follow - q_ready) / swing_t
+#         if hasattr(pb.my_robot, '_qdot_des'):
+#             pb.my_robot._qdot_des = avg_qdot
+#         pb.MoveRobot(q_follow, degree=False)
+#         time.sleep(swing_t)
+#         if hasattr(pb.my_robot, '_qdot_des'):
+#             pb.my_robot._qdot_des = np.zeros([6, 1])
 
-        if hasattr(env, 'tool_id') and hasattr(env, 'cue_ball_id'):
-            p.setCollisionFilterPair(env.tool_id, env.cue_ball_id, -1, -1,
-                                     enableCollision=0, physicsClientId=pb.ClientId)
+#         if hasattr(env, 'tool_id') and hasattr(env, 'cue_ball_id'):
+#             p.setCollisionFilterPair(env.tool_id, env.cue_ball_id, -1, -1,
+#                                      enableCollision=0, physicsClientId=pb.ClientId)
 
-        T_lift = trajectory[-1].copy()
-        T_lift[2, 3] += RETRACT_HEIGHT
-        q_lift = ik.solve_step(q_follow, T_lift)
-        pb.MoveRobot(q_lift, degree=False)
-        time.sleep(0.3)
+#         T_lift = trajectory[-1].copy()
+#         T_lift[2, 3] += RETRACT_HEIGHT
+#         q_lift = ik.solve_step(q_follow, T_lift)
+#         pb.MoveRobot(q_lift, degree=False)
+#         time.sleep(0.3)
 
-        # OBSERVE
-        if DEMO_TYPE == 'minigolf':
-            env.wait_ball_stop(timeout=5.0)
-            dist = env.get_distance_to_hole()
-            success = env.is_hole_in()
-            print(f"  결과: 거리={dist:.4f}m {'HOLE-IN-ONE!' if success else ''}")
-        else:
-            env.wait_balls_stop(timeout=5.0)
-            success = env.is_pocketed()
-            print(f"  결과: {'POCKETED!' if success else 'miss'}")
+#         # OBSERVE
+#         if DEMO_TYPE == 'minigolf':
+#             env.wait_ball_stop(timeout=5.0)
+#             dist = env.get_distance_to_hole()
+#             success = env.is_hole_in()
+#             print(f"  결과: 거리={dist:.4f}m {'HOLE-IN-ONE!' if success else ''}")
+#         else:
+#             env.wait_balls_stop(timeout=5.0)
+#             success = env.is_pocketed()
+#             print(f"  결과: {'POCKETED!' if success else 'miss'}")
 
-        q_traj_deg = np.degrees(np.array(q_traj).reshape(-1, 6))
-        q_follow_deg = np.degrees(np.array(q_follow).flatten())
-        saved_trajectories.append((q_traj_deg, q_follow_deg, phases))
-    pb.MoveRobot(HOME_Q_DEG, degree=True)
-    time.sleep(1)
+#         q_traj_deg = np.degrees(np.array(q_traj).reshape(-1, 6))
+#         q_follow_deg = np.degrees(np.array(q_follow).flatten())
+#         saved_trajectories.append((q_traj_deg, q_follow_deg, phases))
+#     pb.MoveRobot(HOME_Q_DEG, degree=True)
+#     time.sleep(1)
 
 print(f"\n{'='*50}")
 print(f"  SIM 완료! 궤적 {len(saved_trajectories)}개 저장됨")
