@@ -448,9 +448,15 @@ class MazeEnvironment:
         )
 
     def reset_balls(self, cue_pos=None, target_pos=None, ball2_pos=None, ball3_pos=None):
-        """공 위치 리셋 — None이면 해당 공을 건드리지 않음"""
+        """공 위치 리셋"""
+        HIDE_POS = [100, 100, 0]
         if cue_pos is not None:
             p.resetBasePositionAndOrientation(self.cue_ball_id, list(cue_pos), [0,0,0,1],
+                                              physicsClientId=self.client)
+            p.resetBaseVelocity(self.cue_ball_id, [0,0,0], [0,0,0],
+                                physicsClientId=self.client)
+        else :
+            p.resetBasePositionAndOrientation(self.cue_ball_id, HIDE_POS, [0,0,0,1],
                                               physicsClientId=self.client)
             p.resetBaseVelocity(self.cue_ball_id, [0,0,0], [0,0,0],
                                 physicsClientId=self.client)
@@ -459,8 +465,18 @@ class MazeEnvironment:
                                               physicsClientId=self.client)
             p.resetBaseVelocity(self.target_ball_id, [0,0,0], [0,0,0],
                                 physicsClientId=self.client)
+        else :
+            p.resetBasePositionAndOrientation(self.target_ball_id, HIDE_POS, [0,0,0,1],
+                                              physicsClientId=self.client)
+            p.resetBaseVelocity(self.target_ball_id, [0,0,0], [0,0,0],
+                                physicsClientId=self.client)
         if ball2_pos is not None and hasattr(self, 'ball2_id'):
             p.resetBasePositionAndOrientation(self.ball2_id, list(ball2_pos), [0,0,0,1],
+                                              physicsClientId=self.client)
+            p.resetBaseVelocity(self.ball2_id, [0,0,0], [0,0,0],
+                                physicsClientId=self.client)
+        else :
+            p.resetBasePositionAndOrientation(self.ball2_id, HIDE_POS, [0,0,0,1],
                                               physicsClientId=self.client)
             p.resetBaseVelocity(self.ball2_id, [0,0,0], [0,0,0],
                                 physicsClientId=self.client)
@@ -469,6 +485,11 @@ class MazeEnvironment:
                                               physicsClientId=self.client)
             p.resetBaseVelocity(self.ball3_id, [0,0,0], [0,0,0],
                                 physicsClientId=self.client)
+        else :
+            p.resetBasePositionAndOrientation(self.ball3_id, HIDE_POS, [0,0,0,1],
+                                              physicsClientId=self.client)
+            p.resetBaseVelocity(self.ball3_id, [0,0,0], [0,0,0],
+                                physicsClientId=self.client) 
 
     def check_and_pocket_balls(self):
         """포켓 범위 내 공을 감지하여 테이블 아래로 제거.

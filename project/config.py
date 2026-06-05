@@ -29,7 +29,7 @@ IK_MAX_ITER = 10              # IK 반복 횟수 per waypoint
 # ============================================================
 # 타격 파라미터 (공통)
 # ============================================================
-STRIKE_APPROACH_DIST = 0.08    # 타격 전 접근 거리 (m) — 시뮬/실제 균형 (0.08→0.10)
+STRIKE_APPROACH_DIST = 0.10    # 타격 전 접근 거리 (m) — 시뮬/실제 균형 (0.08→0.10)
 STRIKE_FOLLOW_DIST = 0.04     # Follow-through 거리 (m) — 테이블 관통 방지용 축소
 APPROACH_DURATION = 3.0        # 접근 궤적 시간 (s)
 STRIKE_HEIGHT_OFFSET = 0.0     # 타격 높이 오프셋 (m)
@@ -92,7 +92,7 @@ COLOR_BLACK_BALL = [0.08, 0.08, 0.08, 1]
 MAZE_TABLE_LENGTH = 0.305          # 테이블 길이 X (m)
 MAZE_TABLE_WIDTH = 0.635           # 테이블 폭 Y (m)
 MAZE_TABLE_HEIGHT = 0.02           # 테이블 두께 (m)
-MAZE_TABLE_SURFACE_HEIGHT = 0.081  # 테이블 바닥면 높이 (m)
+MAZE_TABLE_SURFACE_HEIGHT = 0.076  # 테이블 바닥면 높이 (m)
 MAZE_TABLE_CENTER_X = 0.485        # 테이블 중심 X (원래 위치 복원)
 MAZE_TABLE_CENTER_Y = 0.165         # 테이블 중심 Y (원래 위치 복원)
 MAZE_GRID_SPACING = 0.05           # 자석 그리드 간격 (m)

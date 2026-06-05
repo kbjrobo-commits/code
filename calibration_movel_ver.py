@@ -116,7 +116,7 @@ def run_position_calibration(indy, pb, env, ik):
         # 1. 카메라로 공 검출
         print("  카메라로 공 검출 중...")
         try:
-            cue_pos, target_pos, ball2_pos = detect_balls()
+            cue_pos, target_pos, ball2_pos, ball3_pos = detect_balls()
         except Exception as e:
             print(f"  [ERROR] 공 검출 실패: {e}")
             continue
@@ -127,12 +127,12 @@ def run_position_calibration(indy, pb, env, ik):
         # 시뮬에서 공 위치 업데이트 (reset_balls로 — setup 재호출 금지)
         if env.cue_ball_id is None:
             # 처음: skip_balls였으니 공 생성
-            env.setup(cue_pos=cue_pos, target_pos=target_pos, ball2_pos=ball2_pos,
+            env.setup(cue_pos=cue_pos, target_pos=target_pos, ball2_pos=ball2_pos, ball3_pos=ball3_pos,
                       num_obstacles=0)
             env.disable_robot_env_collision(pb.my_robot.robotId)
             env.disable_tool_env_collision()
         else:
-            env.reset_balls(cue_pos=cue_pos, target_pos=target_pos, ball2_pos=ball2_pos)
+            env.reset_balls(cue_pos=cue_pos, target_pos=target_pos, ball2_pos=ball2_pos, ball3_pos=ball3_pos)
 
         # 2. 로봇을 공 위치로 천천히 접근 (타격 방향: +x, 매우 느린 속도)
         T_now = pb.my_robot.pinModel.FK(pb.my_robot.q)
@@ -144,8 +144,8 @@ def run_position_calibration(indy, pb, env, ik):
             T_current=T_now, ball_pos=cue_pos,
             strike_direction=approach_dir,
             strike_speed=1.0,  # 매우 느리게
-            approach_dist=0.05,  # 5cm만 접근
-            follow_dist=0.02,
+            approach_dist=0.10,  # 5cm만 접근
+            follow_dist=0.04,
             table_bounds=env.table_bounds
         )
 
@@ -253,7 +253,7 @@ def run_position_calibration(indy, pb, env, ik):
         # 1. 카메라로 공 검출
         print("  카메라로 공 검출 중...")
         try:
-            cue_pos, target_pos, ball2_pos = detect_balls()
+            cue_pos, target_pos, ball2_pos, ball3_pos = detect_balls()
         except Exception as e:
             print(f"  [ERROR] 공 검출 실패: {e}")
             continue
@@ -263,12 +263,12 @@ def run_position_calibration(indy, pb, env, ik):
 
         # 시뮬에서 공 위치 업데이트 (reset_balls로 — setup 재호출 금지)
         if env.cue_ball_id is None:
-            env.setup(cue_pos=cue_pos, target_pos=target_pos, ball2_pos=ball2_pos,
+            env.setup(cue_pos=cue_pos, target_pos=target_pos, ball2_pos=ball2_pos, ball3_pos=ball3_pos,
                       num_obstacles=0)
             env.disable_robot_env_collision(pb.my_robot.robotId)
             env.disable_tool_env_collision()
         else:
-            env.reset_balls(cue_pos=cue_pos, target_pos=target_pos, ball2_pos=ball2_pos)
+            env.reset_balls(cue_pos=cue_pos, target_pos=target_pos, ball2_pos=ball2_pos, ball3_pos=ball3_pos)
         T_now = pb.my_robot.pinModel.FK(pb.my_robot.q)
         q_now = pb.my_robot.q.copy()
 
@@ -278,8 +278,8 @@ def run_position_calibration(indy, pb, env, ik):
             T_current=T_now, ball_pos=cue_pos,
             strike_direction=approach_dir,
             strike_speed=1.0,  # 매우 느리게
-            approach_dist=0.05,  # 5cm만 접근
-            follow_dist=0.02,
+            approach_dist=0.10,  # 5cm만 접근
+            follow_dist=0.04,
             table_bounds=env.table_bounds
         )
 
@@ -444,7 +444,7 @@ def save_position_offset(offset, path=None):
 
 
 # ============================================================
-# Phase 2: 물리 캘리브레이션 (완전 자동)
+# Phase 2: 물리 캘리브레이션 (완전 자동) => 뜯어 고쳐야함 or 지우기
 # ============================================================
 def run_physics_calibration(indy, pb, env, ik, num_trials=5):
     """로봇이 자동으로 타격 → 카메라로 관측 → 파라미터 최적화.
@@ -478,22 +478,22 @@ def run_physics_calibration(indy, pb, env, ik, num_trials=5):
         # 1. 카메라로 초기 위치 검출
         print("  [SCAN] 카메라로 공 검출...")
         try:
-            cue_start, tgt1_start, tgt2_start = detect_balls()
+            cue_start, tgt1_start, tgt2_start, tgt3_start = detect_balls()
             # detect_balls()가 오프셋 자동 적용
         except Exception as e:
             print(f"  [ERROR] 공 검출 실패: {e}")
             continue
 
-        print(f"  cue={cue_start[:2]}, t1={tgt1_start[:2]}, t2={tgt2_start[:2]}")
+        print(f"  cue={cue_start[:2]}, t1={tgt1_start[:2]}, t2={tgt2_start[:2]}, t3={tgt3_start[:2]}")
 
         # 시뮬 환경 설정 (reset_balls로 — setup 재호출 금지)
         if env.cue_ball_id is None:
             env.setup(cue_pos=cue_start, target_pos=tgt1_start,
-                      ball2_pos=tgt2_start, num_obstacles=0)
+                      ball2_pos=tgt2_start, ball3_pos=tgt3_start, num_obstacles=0)
             env.disable_robot_env_collision(pb.my_robot.robotId)
             env.disable_tool_env_collision()
         else:
-            env.reset_balls(cue_pos=cue_start, target_pos=tgt1_start, ball2_pos=tgt2_start)
+            env.reset_balls(cue_pos=cue_start, target_pos=tgt1_start, ball2_pos=tgt2_start, ball3_pos=tgt3_start)
 
         # 2. 플래너로 타격 계획 (자동 — 각도/속도 자동 결정)
         print("  [THINK] 타격 계획 중...")
@@ -501,6 +501,7 @@ def run_physics_calibration(indy, pb, env, ik, num_trials=5):
         ball_pos = np.array(cue_start)
         target_pos = np.array(tgt1_start)
         ball2_pos = np.array(tgt2_start)
+        ball3_pos = np.array(tgt3_start)
 
         try:
             candidates = shot_planner.plan_shot(ball_pos, target_pos,
@@ -900,8 +901,6 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
 
     # ======== Phase 2: Strike (MoveL 직선) ========
     # Align 후 Enter 대기 → movel 직선 타격
-    p_ready = indy.get_control_data()['p']  # [x,y,z,rx,ry,rz] mm/deg
-    print(f"    Ready TCP: [{p_ready[0]:.1f}, {p_ready[1]:.1f}, {p_ready[2]:.1f}] mm")
 
     # 시뮬 FK: ready→follow 변위 계산
     pin = pb.my_robot.pinModel
@@ -916,6 +915,8 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
     print(f"  >>> [Enter] = START → MoveL 직선 STRIKE")
     print(f"  {'='*56}")
     input()
+    p_ready = indy.get_control_data()['p']  # [x,y,z,rx,ry,rz] mm/deg
+    print(f"    Ready TCP: [{p_ready[0]:.1f}, {p_ready[1]:.1f}, {p_ready[2]:.1f}] mm")
 
     # movel 목표 = 현재 TCP + delta (자세 유지)
     p_target = list(p_ready)
@@ -932,7 +933,7 @@ def _replay_strike_on_real(indy, pb, q_traj_deg, q_follow_deg, phases, speed):
         _wait_indy(indy, pb=pb)
     else:
         indy.movel([float(x) for x in p_target],
-                    vel_ratio=80, acc_ratio=100)
+                    vel_ratio=100, acc_ratio=600)
         # movel 대기 (짧은 모션 놓치지 않도록)
         time.sleep(0.2)
         t0 = time.time()

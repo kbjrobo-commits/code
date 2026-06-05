@@ -560,7 +560,10 @@ def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 
             break
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+            pipeline.stop()
+            cv2.destroyAllWindows()
+            print("Stop detecting...")
+            return None
 
     white_ball = [
         white_ball[0] / 1000.0,

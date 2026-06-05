@@ -461,16 +461,16 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 print(f"    큐: {cue_pos[:2]}, 노: {yellow_pos[:2] if yellow_pos is not None else None}, 빨: {red_pos[:2] if red_pos is not None else None}, 검: {black_pos[:2] if black_pos is not None else None}")
 
                 # 시뮬 환경에 비전 위치 반영
-                env.reset_balls(cue_pos=cue_pos)
-                if yellow_pos is not None :
-                    p.resetBasePositionAndOrientation(
-                        env.target_ball_id, yellow_pos, [0,0,0,1], physicsClientId=pb.ClientId)
-                if red_pos is not None :
-                    p.resetBasePositionAndOrientation(
-                        env.ball2_id, red_pos, [0,0,0,1], physicsClientId=pb.ClientId)
-                if black_pos is not None :    
-                    p.resetBasePositionAndOrientation(
-                        env.ball3_id, black_pos, [0,0,0,1], physicsClientId=pb.ClientId)
+                env.reset_balls(cue_pos=cue_pos, target_pos=yellow_pos, ball2_pos=red_pos, ball3_pos=black_pos)
+                # if yellow_pos is not None :
+                #     p.resetBasePositionAndOrientation(
+                #         env.target_ball_id, yellow_pos, [0,0,0,1], physicsClientId=pb.ClientId)
+                # if red_pos is not None :
+                #     p.resetBasePositionAndOrientation(
+                #         env.ball2_id, red_pos, [0,0,0,1], physicsClientId=pb.ClientId)
+                # if black_pos is not None :    
+                #     p.resetBasePositionAndOrientation(
+                #         env.ball3_id, black_pos, [0,0,0,1], physicsClientId=pb.ClientId)
                 time.sleep(0.5)
 
                 # 타격 대상
@@ -532,21 +532,23 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 import threading
                 detect_result = [None]  # [cue, red, yellow] or None
 
-                def _detect_with_timeout():
-                    try:
-                        detect_result[0] = detect_balls(balls_pocketed)
-                    except:
-                        pass
 
-                t = threading.Thread(target=_detect_with_timeout, daemon=True)
-                t.start()
-                t.join(timeout=10.0)  # 10초 타임아웃
+                # def _detect_with_timeout():
+                #     try:
+                #         detect_result[0] = detect_balls(balls_pocketed)
+                #     except:
+                #         pass
+
+                # t = threading.Thread(target=_detect_with_timeout, daemon=True)
+                # t.start()
+                # t.join(timeout=10.0)  # 10초 타임아웃
+
+                detect_result[0] = detect_balls(balls_pocketed)
+                # 임시방편으로 q 눌러서 탈출하는 식으로 변경
+                # detect_balls()에서 리얼센스로 10초정도안에 공 detect 못하면 None 반환하게 바꿀 예정
 
                 if detect_result[0] is None:
-                    # 타임아웃 = 공이 안 보임 = 포켓 성공
-
-                    print(f"  ★ {ball_names[ball_idx]} 포켓 성공! (카메라에서 미감지) Enter 입력.")
-                    input()
+                    print(f"  ★ {ball_names[ball_idx]} 포켓 성공! (카메라에서 미감지)")
                     balls_pocketed[ball_idx] = True
                     break
                 else:
@@ -575,11 +577,11 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
         print(f"    Trick2(빨강): {red_pos[:2]}")
 
         # 2) 시뮬 환경에 비전 위치 반영
-        env.reset_balls(cue_pos=cue_pos)
-        p.resetBasePositionAndOrientation(
-            env.target_ball_id, yellow_pos, [0,0,0,1], physicsClientId=pb.ClientId)
-        p.resetBasePositionAndOrientation(
-            env.ball2_id, red_pos, [0,0,0,1], physicsClientId=pb.ClientId)
+        env.reset_balls(cue_pos=cue_pos, target_pos=yellow_pos, ball2_pos=red_pos)
+        # p.resetBasePositionAndOrientation(
+        #     env.target_ball_id, yellow_pos, [0,0,0,1], physicsClientId=pb.ClientId)
+        # p.resetBasePositionAndOrientation(
+        #     env.ball2_id, red_pos, [0,0,0,1], physicsClientId=pb.ClientId)
         time.sleep(0.5)
 
         # 3) POSTECH O 배치 (C형 4공은 시뮬에서 — 실제에선 이미 배치됨)
