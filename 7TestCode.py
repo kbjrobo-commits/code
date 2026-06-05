@@ -692,7 +692,7 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 sw_t = np.clip(sw_t, 0.05, 0.8)
                 avg_qd = (q_follow_rad - q_ready_rad) / sw_t
                 if hasattr(pb.my_robot, '_qdot_des'):
-                    pb.my_robot._qdot_des = avg_qd
+                    pb.my_robot._qdot_des = avg_qd.reshape(6, 1)
                 pb.MoveRobot(q_follow_rad, degree=False)
                 time.sleep(sw_t)
                 if hasattr(pb.my_robot, '_qdot_des'):
@@ -702,38 +702,35 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
             print(f"\n  [VERIFY] {len(ik_valid_list)}개 후보 GUI 시뮬 검증 시작")
 
             for vi, (ci, cand, traj_data) in enumerate(ik_valid_list):
-                is_last = (vi == len(ik_valid_list) - 1)
+                # save → execute → check → restore
+                saved = _save_ball_positions()
+                _execute_in_sim(traj_data, cand['strike_speed'])
+                env.wait_balls_stop(timeout=5.0)
 
-                if not is_last:
-                    # 비마지막: save → execute → check → restore
-                    saved = _save_ball_positions()
-                    _execute_in_sim(traj_data, cand['strike_speed'])
-                    env.wait_balls_stop(timeout=5.0)
+                cue_scratched = env.is_ball_pocketed(env.cue_ball_id)
+                target_in = env.is_ball_pocketed(target_bid) if target_bid else False
 
-                    cue_scratched = env.is_ball_pocketed(env.cue_ball_id)
-                    target_in = env.is_ball_pocketed(target_bid) if target_bid else False
-
-                    if target_in and not cue_scratched:
-                        pocket_idx = env.which_pocket(target_bid)
-                        print(f"    [V#{vi+1}] ✓ 포켓 성공! (pocket {pocket_idx})")
-                        verified_traj = traj_data
-                        _restore_ball_positions(saved)
-                        pb.MoveRobot(HOME_Q_DEG, degree=True)
-                        time.sleep(0.3)
-                        break
-                    elif target_in and cue_scratched:
-                        print(f"    [V#{vi+1}] ✗ 스크래치 (목적구 포켓 + 큐볼도 포켓)")
-                    else:
-                        print(f"    [V#{vi+1}] ✗ 미스")
-
+                if target_in and not cue_scratched:
+                    pocket_idx = env.which_pocket(target_bid)
+                    print(f"    [V#{vi+1}] ✓ 포켓 성공! (pocket {pocket_idx})")
+                    verified_traj = traj_data
                     _restore_ball_positions(saved)
                     pb.MoveRobot(HOME_Q_DEG, degree=True)
                     time.sleep(0.3)
-                else:
-                    # 마지막 후보: 검증 없이 사용
-                    print(f"    [V#{vi+1}] 마지막 후보 — 검증 없이 선택")
-                    verified_traj = traj_data
                     break
+                elif target_in and cue_scratched:
+                    print(f"    [V#{vi+1}] ✗ 스크래치 (목적구 포켓 + 큐볼도 포켓)")
+                else:
+                    print(f"    [V#{vi+1}] ✗ 미스")
+
+                _restore_ball_positions(saved)
+                pb.MoveRobot(HOME_Q_DEG, degree=True)
+                time.sleep(0.3)
+
+            # 전부 실패 시 → 첫 번째 IK-valid 후보 (headless score 최고) fallback
+            if verified_traj is None:
+                print(f"  [VERIFY] 전부 실패 — 1순위 후보 fallback")
+                verified_traj = ik_valid_list[0][2]
 
             traj_data = verified_traj
 
