@@ -543,7 +543,7 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                             pass
                         movej_both(HOME_Q_DEG, wait=True)
                     
-                    attempt -= 1
+                    time.sleep(2)
                     continue
 
                 # 타격 대상
