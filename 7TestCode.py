@@ -160,7 +160,7 @@ def replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, label="", strike
         wait_indy()
     else:
         indy.movel([float(x) for x in p_target],
-                    vel_ratio=100, acc_ratio=600)
+                    vel_ratio=100 * strike_speed, acc_ratio=600)
         time.sleep(0.2)
         t0 = time.time()
         while time.time() - t0 < 3.0:
@@ -498,17 +498,16 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                     CY = MAZE_TABLE_CENTER_Y
                     # escape니까 테이블 offset은 굳이 미적용
                     center = [CX, CY, cue_pos[2]]
-                    strike_dir = center - cue_pos
-                    strike_dir[2] = 0.0
-                    strike_dir = strike_dir / (np.norm(strike_dir) + 1e-6)
+                    strike_dir = [center[0] - cue_pos[0], center[1] - cue_pos[1], 0]
+                    strike_dir = strike_dir / (np.linalg.norm(strike_dir) + 1e-6)
                     cue_pos[2] += ESCAPE_STRIKE_HEIGHT_OFFSET
                     trajectory, phases = traj_planner.plan_strike(
                         T_current=pb.my_robot.pinModel.FK(pb.my_robot.q),
                         ball_pos=cue_pos,
                         strike_direction=strike_dir,
                         strike_speed=ESCAPE_BALL_SPEED,  # 매우 느리게
-                        approach_dist=0.10,  # 5cm만 접근
-                        follow_dist=0.04,
+                        approach_dist=0.05,  # 5cm만 접근
+                        follow_dist=0.02,
                     )
                     q_now = pb.my_robot.q.copy()
                     q_traj = ik.solve_trajectory(q_now, trajectory)
@@ -533,7 +532,7 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                         print("  [REAL] 실제 로봇 재생...")
                         q_follow_deg = np.degrees(q_follow)
                         print("  실제 로봇 접근 중...")
-                        replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, speed = 1.0)
+                        replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, strike_speed = ESCAPE_BALL_SPEED)
 
                     except Exception as e:
                         print(f"  [ERROR] 실제 로봇 실행 실패: {e}")
