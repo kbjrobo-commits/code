@@ -617,8 +617,8 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 # t.join(timeout=10.0)  # 10초 타임아웃
 
                 detect_result[0] = detect_balls(balls_pocketed)
-                # 임시방편으로 q 눌러서 탈출하는 식으로 변경
-                # detect_balls()에서 리얼센스로 10초정도안에 공 detect 못하면 None 반환하게 바꿀 예정
+                # detect_ball() : 10초이상 걸리면 타임 아웃 => None 반환
+                # detect가 안되면 자동종료, detect가 되면 키입력 받은 후 종료
 
                 if detect_result[0] is None:
                     print(f"  ★ {ball_names[ball_idx]} 포켓 성공! (카메라에서 미감지)")
