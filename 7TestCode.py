@@ -1104,4 +1104,3 @@ print("완료! 시뮬 연결 해제됨")
 # | neuromeka import 실패 | `pip install neuromeka` |
 # | movel 타격이 안됨 | teleop->task 전환 대기 1.5초 확인 |
 # | movel 속도 부족 | STRIKE_APPROACH_DIST 증가 (가속 거리 확보) |
-ㅍ
