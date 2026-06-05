@@ -673,50 +673,120 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                     env._pocketed_balls = set(saved.get('_pocketed', set()))
 
             def _execute_in_sim(traj_data, strike_speed):
-                """GUI 시뮬에서 approach + strike 실행."""
+                """GUI 시뮬에서 approach + strike 실행 (robot_controller 동일 방식)."""
+                from project.trajectory_planner import TrajectoryPlanner
+                _tp = TrajectoryPlanner()
+
                 q_td, q_fd, ph = traj_data
                 q_traj_rad = np.radians(q_td)
-                q_follow_rad = np.radians(q_fd)
+                q_follow_rad = np.radians(q_fd).reshape(-1, 1)
 
                 # 진단: approach/follow 거리 계산
                 approach_start = ph['approach'][0]
                 approach_end = ph['approach'][1]
                 n_approach = approach_end - approach_start
                 q_start_rad = q_traj_rad[approach_start]
-                q_ready_rad = q_traj_rad[approach_end - 1]
+                q_ready_rad = q_traj_rad[approach_end - 1].reshape(-1, 1)
                 T_start = pb.my_robot.pinModel.FK(q_start_rad)
                 T_ready = pb.my_robot.pinModel.FK(q_ready_rad)
                 T_follow = pb.my_robot.pinModel.FK(q_follow_rad)
                 approach_dist_actual = np.linalg.norm(T_ready[:3,3] - T_start[:3,3])
                 strike_dist = np.linalg.norm(T_follow[:3,3] - T_ready[:3,3])
-                ee_vel_target = strike_speed
 
-                print(f"    [DIAG] strike_speed={strike_speed:.3f} m/s, "
-                      f"ee_vel_target={ee_vel_target:.3f} m/s")
+                print(f"    [DIAG] strike_speed={strike_speed:.3f} m/s")
                 print(f"    [DIAG] approach_dist={approach_dist_actual*100:.1f}cm "
                       f"(config={STRIKE_APPROACH_DIST*100:.0f}cm, {n_approach} pts)")
                 print(f"    [DIAG] follow_dist={strike_dist*100:.1f}cm "
                       f"(config={STRIKE_FOLLOW_DIST*100:.0f}cm)")
 
-                # Approach
-                for i in range(approach_start, approach_end):
-                    pb.MoveRobot(q_traj_rad[i], degree=False)
-                    time.sleep(0.002)
-                time.sleep(0.3)
+                # === Approach (MoveRobot 스트리밍) ===
+                step_size = 50
+                for idx in range(approach_start, approach_end, step_size):
+                    q_target = q_traj_rad[min(idx, approach_end - 1)]
+                    pb.MoveRobot(q_target, degree=False)
+                    time.sleep(0.05)
+                pb.MoveRobot(q_ready_rad, degree=False)
+                # Ready 수렴 대기
+                ready_pos = T_ready[:3, 3]
+                for _w in range(500):
+                    time.sleep(0.01)
+                    ee_T = pb.my_robot._T_end
+                    if np.linalg.norm(ee_T[:3, 3] - ready_pos) < 0.002:
+                        break
 
-                # Strike (속도 부여)
-                sw_t = strike_dist / strike_speed if strike_speed > 0 else 0.3
-                sw_t = np.clip(sw_t, 0.05, 0.8)
-                avg_qd = (q_follow_rad - q_ready_rad) / sw_t
-                max_qdot = np.max(np.abs(avg_qd))
-                print(f"    [DIAG] sw_t={sw_t:.3f}s, max_qdot={max_qdot:.1f} rad/s")
+                # === Strike (240Hz 스트리밍 + Kp=5000 PD) ===
+                sim_dt = pb.dt  # 1/240
+                actual_speed = strike_speed if strike_speed > 0 else 0.7
 
-                if hasattr(pb.my_robot, '_qdot_des'):
-                    pb.my_robot._qdot_des = avg_qd.reshape(6, 1)
-                pb.MoveRobot(q_follow_rad, degree=False)
-                time.sleep(sw_t)
-                if hasattr(pb.my_robot, '_qdot_des'):
-                    pb.my_robot._qdot_des = np.zeros([6, 1])
+                # Ready→Follow 구간을 sim_dt 간격으로 리샘플링
+                full_traj = _tp.plan_constant_speed_linear(
+                    T_ready, T_follow, actual_speed, sim_dt)
+                n_strike = len(full_traj)
+                print(f"    [DIAG] strike: {n_strike} pts @ {actual_speed:.2f} m/s "
+                      f"(sim_dt={sim_dt*1000:.1f}ms)")
+
+                # IK 사전 계산
+                q_prev = q_ready_rad.copy()
+                q_strike_traj = []
+                for T in full_traj:
+                    for _ in range(5):
+                        q_prev = ik.solve_step(q_prev, T)
+                    q_strike_traj.append(q_prev.copy())
+
+                # qdot 사전 계산
+                qdot_traj = []
+                for k in range(len(q_strike_traj)):
+                    if k < len(q_strike_traj) - 1:
+                        qdot_traj.append((q_strike_traj[k+1] - q_strike_traj[k]) / sim_dt)
+                    else:
+                        qdot_traj.append(np.zeros_like(q_strike_traj[0]))
+
+                # PD 게인 교체 (Kp=5000, Kd=200 — robot_controller 동일)
+                robot = pb.my_robot
+                original_torque_fn = robot._compute_torque_input
+
+                def _strike_torque():
+                    qddot = robot._qddot_des + \
+                             5000 * (robot._q_des - robot._q) + \
+                             200 * (robot._qdot_des - robot._qdot)
+                    robot._tau = robot._M @ qddot + robot._c + robot._g
+
+                robot._compute_torque_input = _strike_torque
+
+                # 스트리밍 버퍼 설정
+                robot._strike_buf = list(zip(q_strike_traj, qdot_traj))
+                robot._strike_idx = 0
+
+                original_thread_pre = pb._thread_pre
+
+                def _streaming_pre():
+                    original_thread_pre()
+                    if robot._strike_idx < len(robot._strike_buf):
+                        q_des, qdot_des = robot._strike_buf[robot._strike_idx]
+                        robot._q_des = q_des
+                        robot._qdot_des = qdot_des
+                        robot._strike_idx += 1
+                    if hasattr(env, 'check_and_pocket_balls'):
+                        env.check_and_pocket_balls()
+
+                pb._thread_pre = _streaming_pre
+
+                # 버퍼 완료 대기
+                t0 = time.time()
+                timeout = n_strike * sim_dt * 10
+                while robot._strike_idx < len(robot._strike_buf):
+                    if time.time() - t0 > timeout:
+                        break
+                    time.sleep(0.005)
+
+                # 정리: PD 복원 + 버퍼 제거
+                robot._compute_torque_input = original_torque_fn
+                pb._thread_pre = original_thread_pre
+                for attr in ['_strike_buf', '_strike_idx']:
+                    if hasattr(robot, attr):
+                        delattr(robot, attr)
+                robot._qdot_des = np.zeros([robot.numJoints, 1])
+
 
             verified_traj = None
             print(f"\n  [VERIFY] {len(ik_valid_list)}개 후보 GUI 시뮬 검증 시작")
