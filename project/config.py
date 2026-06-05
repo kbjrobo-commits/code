@@ -189,7 +189,7 @@ LINEUP_CUE_OFFSET = 0.12             # 큐볼-첫 목적구 간격 (m)
 # ============================================================
 # Escape shot parameters
 # ============================================================
-ESCAPE_WALL_GAP_THRESHOLD = 0.01
+ESCAPE_WALL_GAP_THRESHOLD = 0.03 + MAZE_BALL_RADIUS
 ESCAPE_STRIKE_HEIGHT_OFFSET = 0.016
 ESCAPE_BALL_SPEED = 0.45
 ESCAPE_SAFE_APPROACH_DIST = 0.035

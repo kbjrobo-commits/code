@@ -187,6 +187,26 @@ def replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, label="", strike
     wait_indy()
     print(f"  [{label}] 전체 완료")
 
+def cue_ball_is_near_cushion(cue_pos) :
+    CX = MAZE_TABLE_CENTER_X
+    CY = MAZE_TABLE_CENTER_Y
+    L = MAZE_TABLE_LENGTH
+    W = MAZE_TABLE_WIDTH
+    x = cue_pos[0]
+    y = cue_pos[1]
+
+    if abs(x - (CX + L/2)) < ESCAPE_WALL_GAP_THRESHOLD:
+        return True
+    elif abs(x - (CX - L/2)) < ESCAPE_WALL_GAP_THRESHOLD:
+        return True
+    
+    if abs(y - (CY + W/2)) < ESCAPE_WALL_GAP_THRESHOLD:
+        return True
+    elif abs(y - (CY - W/2)) < ESCAPE_WALL_GAP_THRESHOLD:
+        return True
+
+    return False
+
 print("헬퍼 함수 정의 완료")
 
 # %% Step 6: 홈 이동 (양쪽 동기화) + FK 비교
@@ -472,6 +492,60 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 #     p.resetBasePositionAndOrientation(
                 #         env.ball3_id, black_pos, [0,0,0,1], physicsClientId=pb.ClientId)
                 time.sleep(0.5)
+                
+                if cue_ball_is_near_cushion(cue_pos) is True :
+                    CX = MAZE_TABLE_CENTER_X
+                    CY = MAZE_TABLE_CENTER_Y
+                    # escape니까 테이블 offset은 굳이 미적용
+                    center = [CX, CY, cue_pos[2]]
+                    strike_dir = center - cue_pos
+                    strike_dir[2] = 0.0
+                    strike_dir = strike_dir / (np.norm(strike_dir) + 1e-6)
+                    cue_pos[2] += ESCAPE_STRIKE_HEIGHT_OFFSET
+                    trajectory, phases = traj_planner.plan_strike(
+                        T_current=pb.my_robot.pinModel.FK(pb.my_robot.q),
+                        ball_pos=cue_pos,
+                        strike_direction=strike_dir,
+                        strike_speed=ESCAPE_BALL_SPEED,  # 매우 느리게
+                        approach_dist=0.10,  # 5cm만 접근
+                        follow_dist=0.04,
+                        table_bounds=env.table_bounds
+                    )
+                    q_now = pb.my_robot.q.copy()
+                    q_traj = ik.solve_trajectory(q_now, trajectory)
+                    q_traj_deg = np.degrees(np.array(q_traj).reshape(-1, 6))
+
+                    print("  [SIM] 시뮬 실행...")
+                    # Approach
+                    for i in range(phases['approach'][0], phases['approach'][1]):
+                        pb.MoveRobot(q_traj[i], degree=False)
+                        time.sleep(0.002)
+                    q_ready = q_traj[phases['approach'][1] - 1].copy()
+                    time.sleep(0.3)
+
+                    # Strike (sim)
+                    q_follow_idx = min(phases['follow'][1] - 1, len(q_traj) - 1)
+                    q_follow = q_traj[q_follow_idx]
+                    pb.MoveRobot(q_follow, degree=False)
+                    time.sleep(0.5)
+
+                    try:
+                        # 실제 로봇도 진행 (strike 후 복귀까지)
+                        print("  [REAL] 실제 로봇 재생...")
+                        q_follow_deg = np.degrees(q_follow)
+                        print("  실제 로봇 접근 중...")
+                        replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, speed = 1.0)
+
+                    except Exception as e:
+                        print(f"  [ERROR] 실제 로봇 실행 실패: {e}")
+                        try:
+                            indy.recover()
+                        except:
+                            pass
+                        movej_both(HOME_Q_DEG, wait=True)
+                    
+                    attempt -= 1
+                    continue
 
                 # 타격 대상
                 if ball_idx == 0:
