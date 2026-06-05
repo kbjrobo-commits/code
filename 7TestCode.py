@@ -95,9 +95,9 @@ def replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, label="", strike
     approach_end = phases['approach'][1]
 
     # ======== Phase 1: Approach (MoveJ) ========
-    APPROACH_STEP = 100
-    APPROACH_VEL = 20
-    APPROACH_ACC = 50
+    APPROACH_STEP = 80
+    APPROACH_VEL = 50
+    APPROACH_ACC = 70
 
     waypoint_indices = list(range(approach_start, approach_end, APPROACH_STEP))
     if waypoint_indices[-1] != approach_end - 1:
@@ -621,31 +621,126 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                   f"(score={best_candidates[0].get('score', -1):.0f}, "
                   f"pocketed={best_candidates[0].get('target_pocketed', False)})")
 
-            # 4) 후보 순서대로 IK + 시뮬 시도 (기존 로직 유지)
-            traj_data = None
-            for ci, cand in enumerate(best_candidates[:5]):
+            # 4) IK 유효한 후보 수집 (시뮬 실행 없이)
+            def _get_target_ball_id(bi):
+                if bi == 0: return env.target_ball_id
+                elif bi == 1: return env.ball2_id
+                else: return getattr(env, 'ball3_id', None)
+
+            ik_valid_list = []
+            for ci, cand in enumerate(best_candidates[:8]):
                 result = _pocket_plan_and_traj(
                     cue_pos, target_pos, cand['strike_dir'], cand['strike_speed'],
-                    execute_sim=True)
+                    execute_sim=False)
                 if result:
-                    print(f"  [IK-OK] 후보 #{ci+1}")
-                    traj_data = result
-                    break
+                    ik_valid_list.append((ci, cand, result))
+                    print(f"  [IK-OK] 후보 #{ci+1} (angle={cand.get('angle_deg', 0):.1f}°)")
+                    if len(ik_valid_list) >= 5:
+                        break
                 else:
                     print(f"  [IK-FAIL] 후보 #{ci+1}")
                     pb.MoveRobot(HOME_Q_DEG, degree=True)
-                    time.sleep(0.3)
+                    time.sleep(0.1)
 
-            if traj_data is None:
+            if not ik_valid_list:
                 print(f"  [FAIL] 모든 후보 IK 실패")
                 pb.MoveRobot(HOME_Q_DEG, degree=True)
                 time.sleep(1)
                 continue
 
-            # 5) 실제 로봇 타격
+            # 5) GUI 시뮬에서 상위 후보 검증 (save/restore 패턴)
+            target_bid = _get_target_ball_id(ball_idx)
+
+            def _save_ball_positions():
+                saved = {}
+                for name, bid in [('cue', env.cue_ball_id),
+                                  ('target', env.target_ball_id),
+                                  ('ball2', getattr(env, 'ball2_id', None)),
+                                  ('ball3', getattr(env, 'ball3_id', None))]:
+                    if bid is not None:
+                        pos, orn = p.getBasePositionAndOrientation(bid, physicsClientId=pb.ClientId)
+                        saved[name] = (bid, list(pos), list(orn))
+                saved['_pocketed'] = set(getattr(env, '_pocketed_balls', set()))
+                return saved
+
+            def _restore_ball_positions(saved):
+                for name in ['cue', 'target', 'ball2', 'ball3']:
+                    if name in saved:
+                        bid, pos, orn = saved[name]
+                        p.resetBasePositionAndOrientation(bid, pos, orn, physicsClientId=pb.ClientId)
+                        p.resetBaseVelocity(bid, [0,0,0], [0,0,0], physicsClientId=pb.ClientId)
+                if hasattr(env, '_pocketed_balls'):
+                    env._pocketed_balls = set(saved.get('_pocketed', set()))
+
+            def _execute_in_sim(traj_data, strike_speed):
+                """GUI 시뮬에서 approach + strike 실행."""
+                q_td, q_fd, ph = traj_data
+                q_traj_rad = np.radians(q_td)
+                q_follow_rad = np.radians(q_fd)
+                # Approach
+                for i in range(ph['approach'][0], ph['approach'][1]):
+                    pb.MoveRobot(q_traj_rad[i], degree=False)
+                    time.sleep(0.002)
+                time.sleep(0.3)
+                # Strike (속도 부여)
+                approach_end = ph['approach'][1]
+                q_ready_rad = q_traj_rad[approach_end - 1]
+                T_ready = pb.my_robot.pinModel.FK(q_ready_rad)
+                T_follow = pb.my_robot.pinModel.FK(q_follow_rad)
+                strike_dist = np.linalg.norm(T_follow[:3,3] - T_ready[:3,3])
+                sw_t = strike_dist / (strike_speed * 0.7) if strike_speed > 0 else 0.3
+                sw_t = np.clip(sw_t, 0.05, 0.8)
+                avg_qd = (q_follow_rad - q_ready_rad) / sw_t
+                if hasattr(pb.my_robot, '_qdot_des'):
+                    pb.my_robot._qdot_des = avg_qd
+                pb.MoveRobot(q_follow_rad, degree=False)
+                time.sleep(sw_t)
+                if hasattr(pb.my_robot, '_qdot_des'):
+                    pb.my_robot._qdot_des = np.zeros([6, 1])
+
+            verified_traj = None
+            print(f"\n  [VERIFY] {len(ik_valid_list)}개 후보 GUI 시뮬 검증 시작")
+
+            for vi, (ci, cand, traj_data) in enumerate(ik_valid_list):
+                is_last = (vi == len(ik_valid_list) - 1)
+
+                if not is_last:
+                    # 비마지막: save → execute → check → restore
+                    saved = _save_ball_positions()
+                    _execute_in_sim(traj_data, cand['strike_speed'])
+                    env.wait_balls_stop(timeout=5.0)
+
+                    cue_scratched = env.is_ball_pocketed(env.cue_ball_id)
+                    target_in = env.is_ball_pocketed(target_bid) if target_bid else False
+
+                    if target_in and not cue_scratched:
+                        pocket_idx = env.which_pocket(target_bid)
+                        print(f"    [V#{vi+1}] ✓ 포켓 성공! (pocket {pocket_idx})")
+                        verified_traj = traj_data
+                        _restore_ball_positions(saved)
+                        pb.MoveRobot(HOME_Q_DEG, degree=True)
+                        time.sleep(0.3)
+                        break
+                    elif target_in and cue_scratched:
+                        print(f"    [V#{vi+1}] ✗ 스크래치 (목적구 포켓 + 큐볼도 포켓)")
+                    else:
+                        print(f"    [V#{vi+1}] ✗ 미스")
+
+                    _restore_ball_positions(saved)
+                    pb.MoveRobot(HOME_Q_DEG, degree=True)
+                    time.sleep(0.3)
+                else:
+                    # 마지막 후보: 검증 없이 사용
+                    print(f"    [V#{vi+1}] 마지막 후보 — 검증 없이 선택")
+                    verified_traj = traj_data
+                    break
+
+            traj_data = verified_traj
+
+            # 6) 실제 로봇 타격
             _sim_execute_and_real_replay(traj_data, f"{ball_names[ball_idx]} #{total_shots}")
 
-            # 6) 비전으로 결과 확인
+            # 7) 비전으로 결과 확인
             print(f"  [OBSERVE] 결과 확인 중...")
             time.sleep(3)
 
