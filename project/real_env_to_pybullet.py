@@ -391,7 +391,18 @@ def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 
     for _ in range(30):
         pipeline.wait_for_frames()
 
+    import time
+
+    timeout_sec = 10.0
+    start_time = time.time()
+
     while True:
+        if time.time() - start_time > timeout_sec :
+            print("Detection timeout")
+            pipeline.stop()
+            cv2.destroyAllWindows()
+            return None
+
         frames = pipeline.wait_for_frames()
         aligned_frames = align.process(frames)
         color_frame = aligned_frames.get_color_frame()
@@ -558,12 +569,6 @@ def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 
             pipeline.stop()
             cv2.destroyAllWindows()
             break
-
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            pipeline.stop()
-            cv2.destroyAllWindows()
-            print("Stop detecting...")
-            return None
 
     white_ball = [
         white_ball[0] / 1000.0,
