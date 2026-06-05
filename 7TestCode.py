@@ -435,7 +435,7 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 pb.MoveRobot(q_traj_full[i], degree=False)
                 time.sleep(0.002)
             time.sleep(0.3)
-            sw_t = np.linalg.norm(traj_c[-1][:3,3] - traj_c[ph_c['approach'][1]-1][:3,3]) / (strike_speed * 0.7)
+            sw_t = np.linalg.norm(traj_c[-1][:3,3] - traj_c[ph_c['approach'][1]-1][:3,3]) / strike_speed if strike_speed > 0 else 0.3
             sw_t = np.clip(sw_t, 0.05, 0.8)
             avg_qd = (q_follow - q_ready) / sw_t
             if hasattr(pb.my_robot, '_qdot_des'):
@@ -677,20 +677,40 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 q_td, q_fd, ph = traj_data
                 q_traj_rad = np.radians(q_td)
                 q_follow_rad = np.radians(q_fd)
+
+                # 진단: approach/follow 거리 계산
+                approach_start = ph['approach'][0]
+                approach_end = ph['approach'][1]
+                n_approach = approach_end - approach_start
+                q_start_rad = q_traj_rad[approach_start]
+                q_ready_rad = q_traj_rad[approach_end - 1]
+                T_start = pb.my_robot.pinModel.FK(q_start_rad)
+                T_ready = pb.my_robot.pinModel.FK(q_ready_rad)
+                T_follow = pb.my_robot.pinModel.FK(q_follow_rad)
+                approach_dist_actual = np.linalg.norm(T_ready[:3,3] - T_start[:3,3])
+                strike_dist = np.linalg.norm(T_follow[:3,3] - T_ready[:3,3])
+                ee_vel_target = strike_speed
+
+                print(f"    [DIAG] strike_speed={strike_speed:.3f} m/s, "
+                      f"ee_vel_target={ee_vel_target:.3f} m/s")
+                print(f"    [DIAG] approach_dist={approach_dist_actual*100:.1f}cm "
+                      f"(config={STRIKE_APPROACH_DIST*100:.0f}cm, {n_approach} pts)")
+                print(f"    [DIAG] follow_dist={strike_dist*100:.1f}cm "
+                      f"(config={STRIKE_FOLLOW_DIST*100:.0f}cm)")
+
                 # Approach
-                for i in range(ph['approach'][0], ph['approach'][1]):
+                for i in range(approach_start, approach_end):
                     pb.MoveRobot(q_traj_rad[i], degree=False)
                     time.sleep(0.002)
                 time.sleep(0.3)
+
                 # Strike (속도 부여)
-                approach_end = ph['approach'][1]
-                q_ready_rad = q_traj_rad[approach_end - 1]
-                T_ready = pb.my_robot.pinModel.FK(q_ready_rad)
-                T_follow = pb.my_robot.pinModel.FK(q_follow_rad)
-                strike_dist = np.linalg.norm(T_follow[:3,3] - T_ready[:3,3])
-                sw_t = strike_dist / (strike_speed * 0.7) if strike_speed > 0 else 0.3
+                sw_t = strike_dist / strike_speed if strike_speed > 0 else 0.3
                 sw_t = np.clip(sw_t, 0.05, 0.8)
                 avg_qd = (q_follow_rad - q_ready_rad) / sw_t
+                max_qdot = np.max(np.abs(avg_qd))
+                print(f"    [DIAG] sw_t={sw_t:.3f}s, max_qdot={max_qdot:.1f} rad/s")
+
                 if hasattr(pb.my_robot, '_qdot_des'):
                     pb.my_robot._qdot_des = avg_qd.reshape(6, 1)
                 pb.MoveRobot(q_follow_rad, degree=False)
@@ -984,7 +1004,7 @@ for rnd in range(1, NUM_ROUNDS + 1):
                 # Strike swing
                 q_ready_v = ik_res['q_trajectory'][ph_v['approach'][1] - 1].copy()
                 q_follow_v = ik.solve_step(q_ready_v, traj_v[-1])
-                sw_t = np.linalg.norm(traj_v[-1][:3,3] - traj_v[ph_v['approach'][1]-1][:3,3]) / (cand['strike_speed'] * 0.7)
+                sw_t = np.linalg.norm(traj_v[-1][:3,3] - traj_v[ph_v['approach'][1]-1][:3,3]) / cand['strike_speed'] if cand['strike_speed'] > 0 else 0.3
                 sw_t = np.clip(sw_t, 0.05, 0.8)
                 avg_qd = (q_follow_v - q_ready_v) / sw_t
                 if hasattr(pb.my_robot, '_qdot_des'):
@@ -1053,7 +1073,7 @@ for rnd in range(1, NUM_ROUNDS + 1):
             # Strike
             print(f"  [SIM] Strike!")
             q_follow_f = ik.solve_step(q_ready_f, traj_f[-1])
-            sw_t = np.linalg.norm(traj_f[-1][:3,3] - traj_f[ph_f['approach'][1]-1][:3,3]) / (cand_f['strike_speed'] * 0.7)
+            sw_t = np.linalg.norm(traj_f[-1][:3,3] - traj_f[ph_f['approach'][1]-1][:3,3]) / cand_f['strike_speed'] if cand_f['strike_speed'] > 0 else 0.3
             sw_t = np.clip(sw_t, 0.05, 0.8)
             avg_qd = (q_follow_f - q_ready_f) / sw_t
             if hasattr(pb.my_robot, '_qdot_des'):
@@ -1130,7 +1150,7 @@ for rnd in range(1, NUM_ROUNDS + 1):
         # SIM: Strike
         print(f"  [SIM] Strike!")
         q_follow = ik.solve_step(q_ready, trajectory[-1])
-        swing_t = np.linalg.norm(trajectory[-1][:3,3] - trajectory[phases['approach'][1]-1][:3,3]) / (speed * 0.7)
+        swing_t = np.linalg.norm(trajectory[-1][:3,3] - trajectory[phases['approach'][1]-1][:3,3]) / speed if speed > 0 else 0.3
         swing_t = np.clip(swing_t, 0.05, 0.8)
         avg_qdot = (q_follow - q_ready) / swing_t
         if hasattr(pb.my_robot, '_qdot_des'):
