@@ -343,7 +343,7 @@ class RobotController:
         q_traj = []
         for T in full_traj:
             # IK 오차를 줄이기 위해 여러 번 반복하여 수렴시킴
-            for _ in range(5):
+            for _ in range(10):
                 q_prev = self.ik.solve_step(q_prev, T)
             q_traj.append(q_prev.copy())
 

@@ -203,7 +203,7 @@ class IKSolver:
         q_prev = q_i.copy()
 
         for idx, T_goal in enumerate(trajectory_SE3):
-            for _ in range(5):
+            for _ in range(10):
                 q_i = self.solve_step(q_i, T_goal)
             q_trajectory.append(q_i.copy())
 

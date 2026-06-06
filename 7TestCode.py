@@ -818,7 +818,7 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 q_prev = q_ready_rad.copy()
                 q_strike_traj = []
                 for T in full_traj:
-                    for _ in range(5):
+                    for _ in range(10):
                         q_prev = ik.solve_step(q_prev, T)
                     q_strike_traj.append(q_prev.copy())
 
