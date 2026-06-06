@@ -553,7 +553,13 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                     follow_dist=0.02,
                 )
                 q_now = pb.my_robot.q.copy()
-                q_traj = ik.solve_trajectory(q_now, trajectory)
+                approach_end_esc = phases['approach'][1]
+                val_from_esc = int(approach_end_esc * 0.65)
+                ik_res_esc = ik.solve_trajectory_validated(q_now, trajectory, validate_from=val_from_esc)
+                if not ik_res_esc['valid']:
+                    print(f"  [ESCAPE] IK 실패: {ik_res_esc['issues'][:3]}")
+                    continue
+                q_traj = ik_res_esc['q_trajectory']
                 q_traj_deg = np.degrees(np.array(q_traj).reshape(-1, 6))
 
                 print("  [SIM] 시뮬 실행...")
@@ -563,14 +569,16 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 q_ready = q_traj[phases['approach'][1] - 1].copy()
                 time.sleep(0.3)
 
-                q_follow_idx = min(phases['follow'][1] - 1, len(q_traj) - 1)
-                q_follow = q_traj[q_follow_idx]
+                # q_follow: 20회 반복으로 수렴 (포켓샷과 동일)
+                q_follow = q_ready.copy()
+                for _ in range(20):
+                    q_follow = ik.solve_step(q_follow, trajectory[-1])
                 pb.MoveRobot(q_follow, degree=False)
                 time.sleep(0.5)
 
                 try:
                     print("  [REAL] 실제 로봇 재생...")
-                    q_follow_deg = np.degrees(q_follow)
+                    q_follow_deg = np.degrees(np.array(q_follow).flatten())
                     replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, strike_speed=ESCAPE_BALL_SPEED)
                 except Exception as e:
                     print(f"  [ERROR] 실제 로봇 실행 실패: {e}")
@@ -629,31 +637,99 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                   f"(score={best_candidates[0].get('score', -1):.0f}, "
                   f"pocketed={best_candidates[0].get('target_pocketed', False)})")
 
-            # 4) IK 유효한 후보 수집 (시뮬 실행 없이)
+            # 4) IK 유효한 후보 수집 — 실패 시 다른 공으로 전환
             def _get_target_ball_id(bi):
                 if bi == 0: return env.target_ball_id
                 elif bi == 1: return env.ball2_id
                 else: return getattr(env, 'ball3_id', None)
 
+            # 우선순위별 공 리스트 (best_ball_idx 우선, 나머지는 remaining에서)
+            ball_try_order = [best_ball_idx] + [b for b in remaining if b != best_ball_idx]
+            # 각 공별 후보 캐시 (best는 이미 계산됨)
+            ball_candidates_map = {best_ball_idx: best_candidates}
+
             ik_valid_list = []
-            for ci, cand in enumerate(best_candidates[:8]):
-                result = _pocket_plan_and_traj(
-                    cue_pos, target_pos, cand['strike_dir'], cand['strike_speed'],
-                    execute_sim=False)
-                if result:
-                    ik_valid_list.append((ci, cand, result))
-                    print(f"  [IK-OK] 후보 #{ci+1} (angle={cand.get('angle_deg', 0):.1f}°)")
-                    if len(ik_valid_list) >= 5:
-                        break
+            for try_bi in ball_try_order:
+                # 후보가 없으면 계산
+                if try_bi not in ball_candidates_map:
+                    tp_pos = _get_ball_pos(try_bi, yellow_pos, red_pos, black_pos)
+                    if tp_pos is None:
+                        continue
+                    ob = _get_other_balls(try_bi, balls_pocketed, yellow_pos, red_pos, black_pos)
+                    cands = shot_planner.plan_pocket_shot(cue_pos, tp_pos, ob)
+                    if not cands:
+                        continue
+                    ball_candidates_map[try_bi] = cands
+
+                cands = ball_candidates_map[try_bi]
+                tp_pos = _get_ball_pos(try_bi, yellow_pos, red_pos, black_pos)
+
+                for ci, cand in enumerate(cands[:8]):
+                    result = _pocket_plan_and_traj(
+                        cue_pos, tp_pos, cand['strike_dir'], cand['strike_speed'],
+                        execute_sim=False)
+                    if result:
+                        ik_valid_list.append((ci, cand, result))
+                        print(f"  [IK-OK] {ball_names[try_bi]} 후보 #{ci+1} (angle={cand.get('angle_deg', 0):.1f}°)")
+                        if len(ik_valid_list) >= 5:
+                            break
+                    else:
+                        print(f"  [IK-FAIL] {ball_names[try_bi]} 후보 #{ci+1}")
+                        pb.MoveRobot(HOME_Q_DEG, degree=True)
+                        time.sleep(0.1)
+
+                if ik_valid_list:
+                    # 이 공으로 IK 성공한 후보가 있으면 사용
+                    ball_idx = try_bi
+                    target_pos = tp_pos
+                    print(f"  [TARGET] {ball_names[ball_idx]} 선택 (IK 유효 {len(ik_valid_list)}개)")
+                    break
                 else:
-                    print(f"  [IK-FAIL] 후보 #{ci+1}")
-                    pb.MoveRobot(HOME_Q_DEG, degree=True)
-                    time.sleep(0.1)
+                    print(f"  [SKIP] {ball_names[try_bi]} 전체 IK 실패 → 다음 공 시도")
 
             if not ik_valid_list:
-                print(f"  [FAIL] 모든 후보 IK 실패")
+                print(f"  [FAIL] 모든 공 IK 실패 → Escape Shot 실행")
                 pb.MoveRobot(HOME_Q_DEG, degree=True)
-                time.sleep(1)
+                time.sleep(0.5)
+                # Escape shot: 큐볼을 테이블 중앙으로 밀어내기
+                CX = MAZE_TABLE_CENTER_X
+                CY = MAZE_TABLE_CENTER_Y
+                center = [CX, CY, cue_pos[2]]
+                strike_dir = np.array([center[0] - cue_pos[0], center[1] - cue_pos[1], 0])
+                strike_dir = strike_dir / (np.linalg.norm(strike_dir) + 1e-6)
+                esc_cue = list(cue_pos)
+                esc_cue[2] += ESCAPE_STRIKE_HEIGHT_OFFSET
+                trajectory, phases = traj_planner.plan_strike(
+                    T_current=pb.my_robot.pinModel.FK(pb.my_robot.q),
+                    ball_pos=esc_cue, strike_direction=strike_dir,
+                    strike_speed=ESCAPE_BALL_SPEED,
+                    approach_dist=0.05, follow_dist=0.02)
+                esc_ik = ik.solve_trajectory_validated(pb.my_robot.q.copy(), trajectory,
+                    validate_from=int(phases['approach'][1] * 0.65))
+                if esc_ik['valid']:
+                    q_traj_esc = esc_ik['q_trajectory']
+                    q_traj_esc_deg = np.degrees(np.array(q_traj_esc).reshape(-1, 6))
+                    for i in range(phases['approach'][0], phases['approach'][1]):
+                        pb.MoveRobot(q_traj_esc[i], degree=False)
+                        time.sleep(0.002)
+                    q_ready_esc = q_traj_esc[phases['approach'][1] - 1].copy()
+                    q_follow_esc = q_ready_esc.copy()
+                    for _ in range(20):
+                        q_follow_esc = ik.solve_step(q_follow_esc, trajectory[-1])
+                    pb.MoveRobot(q_follow_esc, degree=False)
+                    time.sleep(0.5)
+                    try:
+                        q_follow_esc_deg = np.degrees(np.array(q_follow_esc).flatten())
+                        replay_trajectory_on_real(q_traj_esc_deg, q_follow_esc_deg, phases,
+                                                  strike_speed=ESCAPE_BALL_SPEED)
+                    except Exception as e:
+                        print(f"  [ERROR] Escape 실패: {e}")
+                        try: indy.recover()
+                        except: pass
+                else:
+                    print(f"  [ERROR] Escape IK도 실패")
+                pb.MoveRobot(HOME_Q_DEG, degree=True)
+                time.sleep(2)
                 continue
 
             # 5) GUI 시뮬에서 상위 후보 검증 (save/restore 패턴)
