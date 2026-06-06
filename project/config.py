@@ -58,7 +58,7 @@ TOOL_CONSTRAINT_FORCE = 5000    # Constraint 최대 힘 (N)
 # 실제 도구 장착 z축 회전 오프셋 (rad)
 # 도구가 EE z축 기준으로 틀어진 각도. 위에서 봤을 때 반시계=양수.
 # 예: -15° → 도구 수평부가 EE x축에서 시계방향으로 15° 틀어짐
-TOOL_YAW_OFFSET = np.radians(0.0)
+TOOL_YAW_OFFSET = 0
 # Pinocchio FK vs PyBullet EE 프레임 Z 오프셋 보정
 # Pinocchio가 PyBullet보다 ~62mm 높은 EE 위치를 반환 (URDF 프레임 정의 차이)
 # IK 목표를 이만큼 높여서 PyBullet에서 올바른 위치에 도달하도록 보정
@@ -94,17 +94,18 @@ MAZE_TABLE_WIDTH = 0.635           # 테이블 폭 Y (m)
 MAZE_TABLE_HEIGHT = 0.02           # 테이블 두께 (m)
 MAZE_TABLE_SURFACE_HEIGHT = 0.106  # 테이블 바닥면 높이 (m)
 MAZE_TABLE_CENTER_X = 0.485        # 테이블 중심 X (원래 위치 복원)
-MAZE_TABLE_CENTER_Y = 0.165         # 테이블 중심 Y (원래 위치 복원)
-MAZE_GRID_SPACING = 0.05           # 자석 그리드 간격 (m)
+MAZE_TABLE_CENTER_Y = 0.045         # 테이블 중심 Y (원래 위치 복원)
+MAZE_GRID_SPACING = 0.05    
+       # 자석 그리드 간격 (m)
 MAZE_OBSTACLE_RADIUS = 0.015       # 장애물 원기둥 반지름 (m)
 MAZE_OBSTACLE_HEIGHT = 0.05        # 장애물 높이 (m)
 MAZE_CUSHION_HEIGHT = 0.015         # 쿠션 높이 (m)
 MAZE_CUSHION_RESTITUTION = 0.50   # 쿠션 반발계수
-MAZE_BALL_RADIUS = 0.012           # 큐볼 반지름 (m) — 지름 24mm
+MAZE_BALL_RADIUS = 0.0125           # 큐볼 반지름 (m) — 지름 24mm
 MAZE_BALL_MASS = 0.01              # 큐볼 질량 (kg) — 가벼운 공
 MAZE_BALL_RESTITUTION = 0.8       # 큐볼 반발계수
 MAZE_BALL_FRICTION = 0.3        # 실제 당구공 수준 (0.3은 과도)
-MAZE_BALL_ROLLING_FRICTION = 0.026  # 올림: 실측 기반 보정 (0.008→0.012)a
+MAZE_BALL_ROLLING_FRICTION = 0.03  # 올림: 실측 기반 보정 (0.008→0.012)a
 MAZE_STRIKE_ANGLE_DEG = 0          # 수평 타격 (ㄴ자 도구로 수평으로 침)
 
 # 사이드 포켓(홀) — 긴 변(y±, 폭 0.63m) 레일 정중앙 2곳 (짧은 변 x± 모서리 아님)!!
@@ -155,11 +156,11 @@ POCKET_RADIUS = 0.0225                # 포켓 반경 (m) — 직경 45mm
 # 본 설정은 측정값을 rollingFriction "파라미터"로 0.026 지정하는 방식(사용자 확정)이며,
 # 핵심은 GUI와 Headless가 동일 값을 쓰도록 하는 것이다.
 LATERAL_FRICTION = MAZE_BALL_FRICTION       # 0.3  측면 마찰 (공·테이블 공통)
-ROLLING_FRICTION = 0.026                    # 실측 구름마찰계수 (공·테이블 공통)
-SPINNING_FRICTION = 0.02                    # 스핀 마찰 (공)
+ROLLING_FRICTION = 0.03                    # 실측 구름마찰계수 (공·테이블 공통)
+SPINNING_FRICTION = 0.01                    # 스핀 마찰 (공)
 BALL_RESTITUTION = MAZE_BALL_RESTITUTION    # 0.8   공 반발계수
 TABLE_RESTITUTION = 0.5                     # 테이블 반발계수
-CUSHION_RESTITUTION = POCKET_DEMO_CUSHION_RESTITUTION  # 0.5
+CUSHION_RESTITUTION = 0.5  # 0.5
 
 # 레거시 이름 호환(단일 소스는 위 LATERAL/ROLLING_FRICTION)
 POCKET_DEMO_FRICTION = LATERAL_FRICTION
