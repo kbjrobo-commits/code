@@ -160,7 +160,7 @@ def replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, label="", strike
         wait_indy()
     else:
         indy.movel([float(x) for x in p_target],
-                    vel_ratio=100 * strike_speed, acc_ratio=600)
+                    vel_ratio=100 * strike_speed, acc_ratio=700)
         time.sleep(0.2)
         t0 = time.time()
         while time.time() - t0 < 3.0:
@@ -174,7 +174,7 @@ def replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, label="", strike
         p_after = indy.get_control_data()['p']
         moved = float(np.linalg.norm(np.array(p_after[:3]) - np.array(p_ready[:3])))
         print(f"    이동량: {moved:.1f} mm")
-        if moved < 3.0:
+        if moved < 5.0:
             print(f"    [WARN] movel 미동작 → movej fallback")
             indy.movej([float(x) for x in q_follow_deg], vel_ratio=100, acc_ratio=600)
             wait_indy()
