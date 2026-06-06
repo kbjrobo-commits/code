@@ -447,11 +447,11 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
 
         q_traj_deg = np.degrees(np.array(q_traj_full).reshape(-1, 6))
         q_follow_deg = np.degrees(np.array(q_follow).flatten())
-        return (q_traj_deg, q_follow_deg, ph_c)
+        return (q_traj_deg, q_follow_deg, ph_c, traj_c)
 
     def _sim_execute_and_real_replay(traj_data, label):
         """시뮬 궤적 → 실제 로봇 재생 (Enter 확인 포함)."""
-        q_traj_d, q_follow_d, ph = traj_data
+        q_traj_d, q_follow_d, ph = traj_data[0], traj_data[1], traj_data[2]
         pb.MoveRobot(HOME_Q_DEG, degree=True)
         time.sleep(1)
         movej_both(HOME_Q_DEG, wait=True)
@@ -677,19 +677,18 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 from project.trajectory_planner import TrajectoryPlanner
                 _tp = TrajectoryPlanner()
 
-                q_td, q_fd, ph = traj_data
+                q_td, q_fd, ph, cartesian_traj = traj_data
                 q_traj_rad = np.radians(q_td)
                 q_follow_rad = np.radians(q_fd).reshape(-1, 1)
 
-                # 진단: approach/follow 거리 계산
+                # 원본 Cartesian trajectory에서 T_ready, T_follow 추출 (IK 오차 없음)
                 approach_start = ph['approach'][0]
                 approach_end = ph['approach'][1]
                 n_approach = approach_end - approach_start
-                q_start_rad = q_traj_rad[approach_start]
                 q_ready_rad = q_traj_rad[approach_end - 1].reshape(-1, 1)
-                T_start = pb.my_robot.pinModel.FK(q_start_rad)
-                T_ready = pb.my_robot.pinModel.FK(q_ready_rad)
-                T_follow = pb.my_robot.pinModel.FK(q_follow_rad)
+                T_ready = cartesian_traj[approach_end - 1]   # 원본 Cartesian
+                T_follow = cartesian_traj[-1]                 # 원본 Cartesian
+                T_start = cartesian_traj[approach_start]
                 approach_dist_actual = np.linalg.norm(T_ready[:3,3] - T_start[:3,3])
                 strike_dist = np.linalg.norm(T_follow[:3,3] - T_ready[:3,3])
 
@@ -1264,7 +1263,8 @@ print(f"{'='*50}")
 
 # %% Step 10: *** 실제 로봇 -- 라운드 재생 (루프) ***
 # [!] E-Stop 버튼에 손 올리고 실행!
-for rnd_idx, (q_traj_d, q_follow_d, phs) in enumerate(saved_trajectories):
+for rnd_idx, traj_item in enumerate(saved_trajectories):
+    q_traj_d, q_follow_d, phs = traj_item[0], traj_item[1], traj_item[2]
     rnd_num = rnd_idx + 1
     print("=" * 50)
     print(f"  REAL Round {rnd_num}/{len(saved_trajectories)} 재생")
