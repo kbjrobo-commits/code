@@ -705,13 +705,22 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                     pb.MoveRobot(q_target, degree=False)
                     time.sleep(0.05)
                 pb.MoveRobot(q_ready_rad, degree=False)
-                # Ready 수렴 대기
+                # Ready 수렴 대기 (robot_controller 동일: 1000회 = 10초)
                 ready_pos = T_ready[:3, 3]
-                for _w in range(500):
+                ready_z = T_ready[:3, 2]
+                for _w in range(1000):
                     time.sleep(0.01)
                     ee_T = pb.my_robot._T_end
-                    if np.linalg.norm(ee_T[:3, 3] - ready_pos) < 0.002:
+                    pos_err = np.linalg.norm(ee_T[:3, 3] - ready_pos)
+                    z_dot = np.dot(ee_T[:3, 2], ready_z)
+                    if pos_err < 0.002 and z_dot > 0.99:
                         break
+                ee_err = np.linalg.norm(pb.my_robot._T_end[:3, 3] - ready_pos)
+                z_align = np.dot(pb.my_robot._T_end[:3, 2], ready_z)
+                print(f"    [DIAG] Ready EE err={ee_err*1000:.1f}mm, z_align={z_align:.4f}")
+                if ee_err > 0.010:  # 10mm — robot_controller 동일 임계값
+                    print(f"    [SKIP] Ready err too large ({ee_err*1000:.1f}mm > 10mm), aborting strike")
+                    return
 
                 # === Strike (240Hz 스트리밍 + Kp=5000 PD) ===
                 sim_dt = pb.dt  # 1/240
@@ -791,7 +800,7 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
             print(f"\n  [VERIFY] {len(ik_valid_list)}개 후보 GUI 시뮬 검증 시작")
 
             for vi, (ci, cand, traj_data) in enumerate(ik_valid_list):
-                # save → execute → check → restore
+                # save → execute → check → (home → restore)
                 saved = _save_ball_positions()
                 _execute_in_sim(traj_data, cand['strike_speed'])
                 env.wait_balls_stop(timeout=5.0)
@@ -803,18 +812,22 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                     pocket_idx = env.which_pocket(target_bid)
                     print(f"    [V#{vi+1}] ✓ 포켓 성공! (pocket {pocket_idx})")
                     verified_traj = traj_data
-                    _restore_ball_positions(saved)
+                    # 로봇 먼저 Home → 공 복원 (도구-공 겹침 방지)
                     pb.MoveRobot(HOME_Q_DEG, degree=True)
-                    time.sleep(0.3)
+                    time.sleep(0.5)
+                    _restore_ball_positions(saved)
+                    time.sleep(0.1)
                     break
                 elif target_in and cue_scratched:
                     print(f"    [V#{vi+1}] ✗ 스크래치 (목적구 포켓 + 큐볼도 포켓)")
                 else:
                     print(f"    [V#{vi+1}] ✗ 미스")
 
-                _restore_ball_positions(saved)
+                # 로봇 먼저 Home → 공 복원 (도구-공 겹침 방지)
                 pb.MoveRobot(HOME_Q_DEG, degree=True)
-                time.sleep(0.3)
+                time.sleep(0.5)
+                _restore_ball_positions(saved)
+                time.sleep(0.1)
 
             # 전부 실패 시 → 첫 번째 IK-valid 후보 (headless score 최고) fallback
             if verified_traj is None:
