@@ -427,7 +427,15 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
 
         q_traj_full = ik_res['q_trajectory']
         q_ready = q_traj_full[approach_end - 1].copy()
-        q_follow = ik.solve_step(q_ready, traj_c[-1])
+        # q_follow: Ready→Follow 거리가 크므로 (approach+follow ≈ 11cm) 충분히 반복
+        q_follow = q_ready.copy()
+        for _ in range(20):
+            q_follow = ik.solve_step(q_follow, traj_c[-1])
+        # q_follow IK 수렴 검증
+        T_follow_fk = pb.my_robot.pinModel.FK(q_follow)
+        follow_ik_err = np.linalg.norm(T_follow_fk[:3, 3] - traj_c[-1][:3, 3]) * 1000
+        follow_z_err = (T_follow_fk[2, 3] - traj_c[-1][2, 3]) * 1000
+        print(f"    [IK-FOLLOW] err={follow_ik_err:.2f}mm, z_err={follow_z_err:.2f}mm")
 
         # 시뮬에서 실행 (GUI 확인용) — execute_sim=False이면 건너뜀
         if execute_sim:
