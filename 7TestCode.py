@@ -718,9 +718,6 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 ee_err = np.linalg.norm(pb.my_robot._T_end[:3, 3] - ready_pos)
                 z_align = np.dot(pb.my_robot._T_end[:3, 2], ready_z)
                 print(f"    [DIAG] Ready EE err={ee_err*1000:.1f}mm, z_align={z_align:.4f}")
-                if ee_err > 0.010:  # 10mm — robot_controller 동일 임계값
-                    print(f"    [SKIP] Ready err too large ({ee_err*1000:.1f}mm > 10mm), aborting strike")
-                    return
 
                 # === Strike (240Hz 스트리밍 + Kp=5000 PD) ===
                 sim_dt = pb.dt  # 1/240
