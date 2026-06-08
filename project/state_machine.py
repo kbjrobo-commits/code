@@ -733,6 +733,58 @@ class AutonomousStateMachine:
             ball_id = ball_id_getters[ball_idx]()
             chosen = best_candidate if best_candidate is not None else {}
 
+            # === 자살골 방지: score≤0이고 scratch 예측이면 escape shot ===
+            chosen_score = chosen.get('score', -1)
+            chosen_scratch = chosen.get('cue_scratched', False)
+            chosen_cushion_first = chosen.get('cue_hit_cushion_before_target', False)
+            if chosen_score <= 0 or chosen_scratch or chosen_cushion_first:
+                print(
+                    f"\n  [SAFETY] Best candidate is unsafe "
+                    f"(score={chosen_score:.0f}, scratch={chosen_scratch}, "
+                    f"cushion_first={chosen_cushion_first}). "
+                    f"Attempting escape shot instead."
+                )
+                # escape plan 시도 (벽 근접 아니어도 테이블 중앙으로 밀기)
+                cue_pos = best_scan['cue_pos']
+                escape_plan = self._make_escape_plan(cue_pos, scan_data=best_scan)
+                if escape_plan is None:
+                    # 벽 근처가 아니면 수동 escape: 테이블 중앙 방향으로
+                    b = self.env.table_bounds
+                    center = np.array([
+                        (b['x_min'] + b['x_max']) / 2,
+                        (b['y_min'] + b['y_max']) / 2
+                    ])
+                    cue2 = np.array(cue_pos[:2])
+                    escape_dir = center - cue2
+                    escape_norm = np.linalg.norm(escape_dir)
+                    if escape_norm > 1e-6:
+                        escape_dir = escape_dir / escape_norm
+                    else:
+                        escape_dir = np.array([0.0, 1.0])
+                    escape_angle = np.arctan2(escape_dir[1], escape_dir[0])
+                    escape_plan = {
+                        'strike_dir': escape_dir,
+                        'strike_speed': MAX_TOOL_SPEED,
+                        'ball_pos': cue_pos,
+                        'candidates': [{
+                            'strike_dir': escape_dir,
+                            'strike_speed': MAX_TOOL_SPEED,
+                            'ball_speed': 0.3,
+                            'score': 1,
+                            'angle_deg': np.degrees(escape_angle),
+                            'angle': escape_angle,
+                            'safe_approach_dist': STRIKE_APPROACH_DIST,
+                            'follow_dist': STRIKE_FOLLOW_DIST,
+                            'is_escape_shot': True,
+                            'target_pocketed': False,
+                            'illegal_contact': False,
+                            'cue_scratched': False,
+                        }],
+                    }
+                    print(f"  [SAFETY] Pushing cue toward center at {np.degrees(escape_angle):.1f}deg")
+                best_plan = escape_plan
+                best_scan['_target_ball_id'] = ball_id
+
             print(
                 f"\n  [CHOSEN] {ball_names[ball_idx]} "
                 f"score={chosen.get('score', -1):.0f}, "
