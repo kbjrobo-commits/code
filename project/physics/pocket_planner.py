@@ -1,3 +1,4 @@
+#<포켓 플래너 수정 전 0607 1543>
 """
 포켓볼 타격 탐색기 — Headless PyBullet 공 직접 시뮬
 ===================================================
@@ -23,17 +24,17 @@ from project.physics.contact_model import (
 try:
     ESCAPE_WALL_GAP_THRESHOLD
 except NameError:
-    ESCAPE_WALL_GAP_THRESHOLD = MAZE_BALL_RADIUS + 0.03      # 공 표면-벽 간격 1cm 이하
+    ESCAPE_WALL_GAP_THRESHOLD = MAZE_BALL_RADIUS + 0.015      # 공 표면-벽 간격 1cm 이하
 
 try:
     ESCAPE_STRIKE_HEIGHT_OFFSET
 except NameError:
-    ESCAPE_STRIKE_HEIGHT_OFFSET = 0.016   # 기존 strike height보다 +1.6cm
+    ESCAPE_STRIKE_HEIGHT_OFFSET = 0.017   # 기존 strike height보다 +1.7cm
 
 try:
     ESCAPE_BALL_SPEED
 except NameError:
-    ESCAPE_BALL_SPEED = 0.45              # escape용 공 속도
+    ESCAPE_BALL_SPEED = 0.2              # escape용 공 속도
 
 try:
     ESCAPE_SAFE_APPROACH_DIST
@@ -43,7 +44,7 @@ except NameError:
 try:
     ESCAPE_FOLLOW_DIST
 except NameError:
-    ESCAPE_FOLLOW_DIST = 0.025
+    ESCAPE_FOLLOW_DIST = 0.02
 
 
 class PocketShotPlanner:
@@ -90,7 +91,7 @@ class PocketShotPlanner:
         CH = MAZE_CUSHION_HEIGHT
         top_z = center[2] + TH / 2 + CH / 2
         thickness = 0.03
-        gap = POCKET_RADIUS * 2
+        gap = POCKET_RADIUS * 1.6
 
         x_min, x_max = CX - L / 2, CX + L / 2
         y_min, y_max = CY - W / 2, CY + W / 2
@@ -343,17 +344,17 @@ class PocketShotPlanner:
         def _n_success(recs):
             return sum(1 for r in recs if r['score'] >= POCKET_SUCCESS_SCORE)
 
-        # --- Tier A: 다이렉트 로컬 (±8° @0.5°) ---
-        a_angles, rA = _scan(_angles_around(ideal_angles, 8.0, 0.5))
+        # --- Tier A: 다이렉트 로컬 (±5° @0.5°) ---
+        a_angles, rA = _scan(_angles_around(ideal_angles, 10.0, 0.2))
         search_mode = 'DIRECT'
-        print(f"  [Search:DIRECT] {len(ideal_angles)} ideal dirs, range=±8.0deg@0.5deg, "
+        print(f"  [Search:DIRECT] {len(ideal_angles)} ideal dirs, range=±10.0deg@0.2deg, "
               f"angles={len(a_angles)}, candidates={len(rA)}, pocket_hits={_n_success(rA)}")
 
-        # --- Tier B: 확장 로컬 (±20° @1.0°) ---
+        # --- Tier B: 확장 로컬 (±15° @1.0°) ---
         if _n_success(results) == 0:
-            b_angles, rB = _scan(_angles_around(ideal_angles, 20.0, 1.0))
+            b_angles, rB = _scan(_angles_around(ideal_angles, 20.0, 0.2))
             search_mode = 'EXPANDED'
-            print(f"  [Search:EXPANDED] range=±20.0deg@1.0deg, "
+            print(f"  [Search:EXPANDED] range=±20.0deg@0.2deg, "
                   f"angles={len(b_angles)}, candidates={len(rB)}, pocket_hits={_n_success(rB)}")
 
         # --- Tier C: 글로벌/쿠션 폴백 (360° @2.0°) ---
@@ -442,6 +443,7 @@ class PocketShotPlanner:
         # 시뮬 + 접촉 추적
         hit_target = False
         illegal_contact = False
+        cue_hit_cushion_before_target = False
         cue_scratched = False
         target_min_pocket_dist = float('inf')  # 경로 상 최소 포켓 거리
         target_closest_pocket_idx = -1
@@ -457,6 +459,8 @@ class PocketShotPlanner:
                 other_body = c[2]
                 if other_body == target_id:
                     hit_target = True
+                elif other_body in cushion_ids and not hit_target:
+                    cue_hit_cushion_before_target = True
                 elif other_body in other_ids:
                     illegal_contact = True
                     break
@@ -553,12 +557,14 @@ class PocketShotPlanner:
         score = 0
         if illegal_contact:
             score = -10000
+        elif cue_hit_cushion_before_target:
+            score = -1000
         elif cue_scratched:
-            score = -5000
+            score = -3000
         elif target_pocketed:
             # 포켓 성공 후보 내부에서도 흰공-목적구-포켓이 직선에 가까울수록 우선.
-            # 최대 +15000점 보너스.
-            score = 100000 + int(15000 * alignment_quality)
+            # 최대 +30000점 보너스.
+            score = 100000 + int(20000 * alignment_quality)
         elif hit_target:
             # 포켓 진입 실패지만 타격함 — 포켓까지 거리로 부분 점수 (상한 4000)
             min_pocket_dist = min(
@@ -575,6 +581,7 @@ class PocketShotPlanner:
             'target_pocketed': target_pocketed,
             'pocket_idx': pocket_idx,
             'illegal_contact': illegal_contact,
+            'cue_hit_cushion_before_target': cue_hit_cushion_before_target,
             'cue_scratched': cue_scratched,
             'cue_final': [cue_final[0], cue_final[1]],
             'target_final': [target_final[0], target_final[1]],
@@ -843,11 +850,12 @@ class PocketShotPlanner:
             r for r in results
             if r['score'] > 0 or (
                 not r.get('illegal_contact', False)
+                and not r.get('cue_hit_cushion_before_target', False)
                 and not r.get('cue_scratched', False)
             )
         ]
         if not positive:
-            positive = sorted(results, key=lambda r: r['score'], reverse=True)[:5]
+            positive = sorted(results, key=lambda r: r['score'], reverse=True)[:7]
 
         # 도달가능성 + 다양성 필터
         positive.sort(
@@ -1000,9 +1008,11 @@ class PocketShotPlanner:
                 'target_closest_pocket_idx': r.get('target_closest_pocket_idx'),
                 'precision_distance': r.get('precision_distance'),
                 'illegal_contact': r.get('illegal_contact', False),
+                'cue_hit_cushion_before_target': r.get(
+                    'cue_hit_cushion_before_target', False),
                 'cue_scratched': r.get('cue_scratched', False),
                 'cue_final': r.get('cue_final'),
-                'cushion_count': 0,
+                'cushion_count': 1 if r.get('cue_hit_cushion_before_target') else 0,
                 'hit_t1': r.get('hit_target', False),
                 'hit_t2': False,
                 'events': [],
