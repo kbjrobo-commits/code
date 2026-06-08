@@ -454,6 +454,8 @@ class PocketShotPlanner:
             p.stepSimulation(physicsClientId=sim)
 
             # 큐볼 접촉 체크
+            # - 큐볼이 타겟에 먼저 맞기 전에 다른 공에 접촉하면 illegal
+            # - 타겟에 맞은 후에는 큐볼이 다른 공에 맞아도 허용 (당구 규칙)
             cue_contacts = p.getContactPoints(bodyA=cue_id, physicsClientId=sim)
             for c in cue_contacts:
                 other_body = c[2]
@@ -461,21 +463,15 @@ class PocketShotPlanner:
                     hit_target = True
                 elif other_body in cushion_ids and not hit_target:
                     cue_hit_cushion_before_target = True
-                elif other_body in other_ids:
+                elif other_body in other_ids and not hit_target:
+                    # 타겟을 먼저 맞추기 전에 다른 공 접촉 = illegal
                     illegal_contact = True
                     break
             if illegal_contact:
                 break
 
-            # 목적구 접촉 체크 (목적구가 다른 공에 부딪히는 것도 금지)
-            if hit_target:
-                target_contacts = p.getContactPoints(bodyA=target_id, physicsClientId=sim)
-                for c in target_contacts:
-                    if c[2] in other_ids:
-                        illegal_contact = True
-                        break
-                if illegal_contact:
-                    break
+            # 목적구가 다른 공에 부딪히는 것은 허용
+            # (타겟이 홀로 가는 경로에 다른 공이 있어도 해를 찾을 수 있음)
 
             # 큐볼 포켓 스크래치 체크
             cue_pos_now, _ = p.getBasePositionAndOrientation(cue_id, physicsClientId=sim)
@@ -844,25 +840,29 @@ class PocketShotPlanner:
         """결과를 state_machine이 기대하는 후보 형식으로 변환."""
         SAFE_RADIUS = 0.65
 
-        # 후보 최소 5개 확보: 성공/부분성공 후보를 우선하되,
-        # 부족하면 scratch/illegal이 아닌 legal 후보까지 fallback으로 포함.
-        positive = [
-            r for r in results
-            if r['score'] > 0 or (
-                not r.get('illegal_contact', False)
+        # 후보 필터링: score>0 후보를 우선하고, 없으면 legal 후보로 fallback.
+        # score<=0 (빗나간/illegal/scratch)인 후보가 alignment만 좋아서
+        # 선택되면 자살골이 발생하므로, score>0 대안이 있으면 제외한다.
+        scored = [r for r in results if r['score'] > 0]
+        if scored:
+            positive = scored
+        else:
+            # score>0인 후보가 없으면 legal+non-scratch 후보로 fallback
+            positive = [
+                r for r in results
+                if not r.get('illegal_contact', False)
                 and not r.get('cue_hit_cushion_before_target', False)
                 and not r.get('cue_scratched', False)
-            )
-        ]
+            ]
         if not positive:
             positive = sorted(results, key=lambda r: r['score'], reverse=True)[:7]
 
-        # 도달가능성 + 다양성 필터
+        # 도달가능성 + 다양성 필터: score 우선, alignment은 tiebreak
         positive.sort(
             key=lambda r: (
                 1 if r.get('target_pocketed', False) else 0,
-                r.get('alignment_quality', 0.0),
                 r.get('score', -float('inf')),
+                r.get('alignment_quality', 0.0),
             ),
             reverse=True
         )

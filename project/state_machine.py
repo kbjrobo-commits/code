@@ -640,15 +640,14 @@ class AutonomousStateMachine:
               1) target_pocketed=True
               2) illegal_contact=False
               3) cue_scratched=False
-              4) alignment_quality 높음
-                 - 흰공 -> 목적구 방향과 목적구 -> 포켓 방향이
-                   최대한 일직선에 가까운 후보 우선
-              5) score
+              4) score (점수가 높은 샷 우선 — 빗나간 샷이 직선성만 좋아서
+                 선택되면 큐볼이 포켓으로 직행하는 자살골 발생)
+              5) alignment_quality (동점일 때 직선에 가까운 후보 우선)
               6) robust_count
               7) center_quality
             """
             if candidate is None:
-                return (-1, -1, -1, -1.0, -float('inf'), 0, 0.0)
+                return (-1, -1, -1, -float('inf'), -1.0, 0, 0.0)
 
             pocket_success = 1 if candidate.get('target_pocketed', False) else 0
             legal = 0 if candidate.get('illegal_contact', False) else 1
@@ -662,8 +661,8 @@ class AutonomousStateMachine:
                 pocket_success,
                 legal,
                 no_scratch,
-                alignment_quality,
                 score,
+                alignment_quality,
                 robust,
                 center_quality,
             )
