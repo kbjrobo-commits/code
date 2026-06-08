@@ -726,22 +726,73 @@ class AutonomousStateMachine:
                     best_candidate = candidate
 
             if best_ball_idx is None or best_plan is None or not best_plan.get('candidates'):
-                print("  [FAIL] No viable shot for any remaining ball")
-                continue
+                print("  [FAIL] No viable shot for any remaining ball → escape")
+                # 해가 전혀 없으면 큐볼을 테이블 중앙으로 밀어 리포지셔닝
+                # 가장 마지막으로 스캔한 데이터에서 큐볼 위치 가져오기
+                if best_scan is not None:
+                    cue_pos = best_scan['cue_pos']
+                else:
+                    # scan도 없으면 skip
+                    continue
+                escape_plan = self._make_escape_plan(cue_pos, scan_data=best_scan)
+                if escape_plan is None:
+                    b = self.env.table_bounds
+                    center = np.array([
+                        (b['x_min'] + b['x_max']) / 2,
+                        (b['y_min'] + b['y_max']) / 2
+                    ])
+                    cue2 = np.array(cue_pos[:2])
+                    escape_dir = center - cue2
+                    escape_norm = np.linalg.norm(escape_dir)
+                    if escape_norm > 1e-6:
+                        escape_dir = escape_dir / escape_norm
+                    else:
+                        escape_dir = np.array([0.0, 1.0])
+                    escape_angle = np.arctan2(escape_dir[1], escape_dir[0])
+                    escape_plan = {
+                        'strike_dir': escape_dir,
+                        'strike_speed': MAX_TOOL_SPEED,
+                        'ball_pos': cue_pos,
+                        'candidates': [{
+                            'strike_dir': escape_dir,
+                            'strike_speed': MAX_TOOL_SPEED,
+                            'ball_speed': 0.3,
+                            'score': 1,
+                            'angle_deg': np.degrees(escape_angle),
+                            'angle': escape_angle,
+                            'safe_approach_dist': STRIKE_APPROACH_DIST,
+                            'follow_dist': STRIKE_FOLLOW_DIST,
+                            'is_escape_shot': True,
+                            'target_pocketed': False,
+                            'hit_target': False,
+                            'illegal_contact': False,
+                            'cue_scratched': False,
+                            'pocket_idx': -1,
+                            'cue_path': None,
+                            'target_path': None,
+                            'alignment_quality': 0.0,
+                            'alignment_error_deg': 180.0,
+                            'center_quality': 0.0,
+                            'robust_count': 0,
+                        }],
+                    }
+                    print(f"  [ESCAPE] No candidates → pushing cue toward center at {np.degrees(escape_angle):.1f}deg")
+                best_plan = escape_plan
+                best_ball_idx = remaining[0]
+                ball_idx = best_ball_idx
+                best_scan['_target_ball_id'] = ball_id_getters[ball_idx]()
 
             ball_idx = best_ball_idx
             ball_id = ball_id_getters[ball_idx]()
             chosen = best_candidate if best_candidate is not None else {}
 
-            # === 자살골 방지: score≤0이고 scratch 예측이면 escape shot ===
+            # === 자살골 방지: scratch 예측일 때만 escape shot ===
             chosen_score = chosen.get('score', -1)
             chosen_scratch = chosen.get('cue_scratched', False)
-            chosen_cushion_first = chosen.get('cue_hit_cushion_before_target', False)
-            if chosen_score <= 0 or chosen_scratch or chosen_cushion_first:
+            if chosen_scratch:
                 print(
-                    f"\n  [SAFETY] Best candidate is unsafe "
-                    f"(score={chosen_score:.0f}, scratch={chosen_scratch}, "
-                    f"cushion_first={chosen_cushion_first}). "
+                    f"\n  [SAFETY] Best candidate predicts cue scratch "
+                    f"(score={chosen_score:.0f}). "
                     f"Attempting escape shot instead."
                 )
                 # escape plan 시도 (벽 근접 아니어도 테이블 중앙으로 밀기)

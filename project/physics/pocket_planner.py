@@ -91,7 +91,7 @@ class PocketShotPlanner:
         CH = MAZE_CUSHION_HEIGHT
         top_z = center[2] + TH / 2 + CH / 2
         thickness = 0.03
-        gap = POCKET_RADIUS * 2  # maze_env와 동일한 포켓 갭
+        gap = POCKET_RADIUS * 1.6  # 시뮬 마진: 좁은 갭에서도 확실히 들어가는 각도만 선택
 
         x_min, x_max = CX - L / 2, CX + L / 2
         y_min, y_max = CY - W / 2, CY + W / 2
@@ -437,6 +437,13 @@ class PocketShotPlanner:
                                               physicsClientId=sim)
             p.resetBaseVelocity(bid, [0,0,0], [0,0,0], physicsClientId=sim)
 
+        # 시뮬 시작 전 초기 쿠션 접촉 기록 (벽에 붙은 큐볼의 기존 접촉 제외)
+        # 속도 부여 전에 기록해야 공이 아직 움직이지 않은 상태의 접촉만 잡힘
+        initial_cushion_contacts = set()
+        for c in p.getContactPoints(bodyA=cue_id, physicsClientId=sim):
+            if c[2] in cushion_ids:
+                initial_cushion_contacts.add(c[2])
+
         # 큐볼 속도 부여 (순수 구름 조건)
         self._set_rolling_velocity(sim, cue_id, speed, angle)
 
@@ -462,7 +469,8 @@ class PocketShotPlanner:
                 if other_body == target_id:
                     hit_target = True
                 elif other_body in cushion_ids and not hit_target:
-                    cue_hit_cushion_before_target = True
+                    if other_body not in initial_cushion_contacts:
+                        cue_hit_cushion_before_target = True
                 elif other_body in other_ids and not hit_target:
                     # 타겟을 먼저 맞추기 전에 다른 공 접촉 = illegal
                     illegal_contact = True
@@ -525,6 +533,14 @@ class PocketShotPlanner:
         if not cue_scratched:
             for pp in pocket_positions:
                 if np.linalg.norm(np.array(cue_final[:2]) - pp[:2]) < POCKET_CAPTURE_RADIUS:
+                    cue_scratched = True
+                    break
+        # GUI 포켓 갭(2.0x)이 시뮬(1.6x)보다 넓어 시뮬에서 놓칠 수 있음
+        # GUI 기준 넓은 반경으로 추가 판정하여 자살골 방지
+        if not cue_scratched:
+            gui_scratch_radius = POCKET_RADIUS * 1.5
+            for pp in pocket_positions:
+                if np.linalg.norm(np.array(cue_final[:2]) - pp[:2]) < gui_scratch_radius:
                     cue_scratched = True
                     break
 

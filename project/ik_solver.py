@@ -166,7 +166,7 @@ class IKSolver:
         return q_trajectory
 
     def solve_trajectory_validated(self, q_init, trajectory_SE3,
-                                    w_threshold=0.002, dq_max=np.radians(40),
+                                    w_threshold=0.002, dq_max=np.radians(25),
                                     validate_from=0, table_bounds=None):
         """궤적 전체 IK 사전풀이 + 검증
 
