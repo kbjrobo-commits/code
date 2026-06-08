@@ -504,6 +504,8 @@ def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 
         cv2.imshow("yellow", yellow_mask)
         cv2.imshow("white", white_mask)
         cv2.imshow("black", black_mask)
+        cv2.waitKey(1)
+        
         print(white_ball, red_ball, yellow_ball, black_ball)
         # 세 공 모두 검출 성공
         if (
