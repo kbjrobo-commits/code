@@ -290,9 +290,9 @@ def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 
 
     # RGB 센서 설정 (노출, 화이트밸런스, 게인 고정)
     rgb_sensor = None
-    for senor in profile.get_device().query_sensors():
-        if senor.get_info(rs.camera_info.name) == 'RGB Camera':
-            rgb_sensor = senor
+    for sensor in profile.get_device().query_sensors():
+        if sensor.get_info(rs.camera_info.name) == 'RGB Camera':
+            rgb_sensor = sensor
             break
     
     if rgb_sensor is not None:
