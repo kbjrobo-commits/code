@@ -371,7 +371,7 @@ def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 
         )
 
         if H is None:
-            print("Need ArUco markers 0,1,2,3")
+            #print("Need ArUco markers 0,1,2,3")
             continue
 
         warped_color = cv2.warpPerspective(
@@ -464,28 +464,28 @@ def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 
             warped_color,
             (0, 0, 255)
         ) if ball_pocketed[1] is False else None
-        check_detected[1] = True if (ball_pocketed[1] is True or red_ball is not None) else False
+        check_detected[1] = True if (ball_pocketed[1] is True or red_ball is not None or check_detected[1] is True) else False
 
         yellow_ball = detect_ball_fixed(
             yellow_mask,
             warped_color,
             (0, 255, 255)
         ) if ball_pocketed[0] is False else None
-        check_detected[0] = True if (ball_pocketed[0] is True or yellow_ball is not None) else False
+        check_detected[0] = True if (ball_pocketed[0] is True or yellow_ball is not None or check_detected[0] is True) else False
 
         black_ball = detect_ball_fixed(
             black_mask,
             warped_color,
             (0, 0, 0)
         ) if ball_pocketed[2] is False else None
-        check_detected[2] = True if (ball_pocketed[2] is True or black_ball is not None) else False
+        check_detected[2] = True if (ball_pocketed[2] is True or black_ball is not None or check_detected[2] is True) else False
 
         cv2.imshow("Warped Result", warped_color)
         cv2.imshow("red", red_mask)
         cv2.imshow("yellow", yellow_mask)
         cv2.imshow("white", white_mask)
         cv2.imshow("black", black_mask)
-
+        print(white_ball, red_ball, yellow_ball, black_ball)
         # 세 공 모두 검출 성공
         if (
             white_ball is not None and
