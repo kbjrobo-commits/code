@@ -1,3 +1,5 @@
+#수정 전 state_machin.py (06061824 기준)
+
 """
 ?먯쑉 猷⑦봽 State Machine
 =========================
@@ -491,7 +493,7 @@ class AutonomousStateMachine:
                     if target_in and not cue_scratched:
                         valid_shot = True
                     elif target_in and cue_scratched:
-                        valid_shot = False
+                        valid_shot = True
                         print(f"    [V#{vi+1}] SCRATCH — target pocketed but cue also scratched")
                     else:
                         valid_shot = False
@@ -775,27 +777,27 @@ class AutonomousStateMachine:
                 pocket_idx = self.env.which_pocket(ball_id)
                 print(f"  [SUCCESS] {ball_names[ball_idx]} pocketed! (pocket {pocket_idx})")
 
-                if self.env.is_ball_pocketed(self.env.cue_ball_id):
-                    print("  [WARNING] CUE BALL SCRATCHED! Resetting cue...")
-                    self.env.reset_balls(cue_pos=self.env.cue_start_pos)
-                    time.sleep(0.5)
+                # if self.env.is_ball_pocketed(self.env.cue_ball_id):
+                #     print("  [WARNING] CUE BALL SCRATCHED! Resetting cue...")
+                #     self.env.reset_balls(cue_pos=self.env.cue_start_pos)
+                #     time.sleep(0.5)
 
             else:
                 cue_scratched = self.env.is_ball_pocketed(self.env.cue_ball_id)
 
-                if cue_scratched:
-                    print("  [FAIL] Cue ball scratched! Resetting...")
-                    self.env.reset_balls(cue_pos=self.env.cue_start_pos)
-                    time.sleep(0.5)
+                # if cue_scratched:
+                #     print("  [FAIL] Cue ball scratched! Resetting...")
+                #     self.env.reset_balls(cue_pos=self.env.cue_start_pos)
+                #     time.sleep(0.5)
 
-                else:
-                    target_final = ball_pos_getters[ball_idx]()
-                    if target_final is not None:
-                        nearest_dist = min(
-                            np.linalg.norm(target_final[:2] - pp[:2])
-                            for pp in self.env.pocket_positions
-                        )
-                        print(f"  [MISS] Nearest pocket dist: {nearest_dist * 100:.1f}cm")
+                # else:
+                target_final = ball_pos_getters[ball_idx]()
+                if target_final is not None:
+                    nearest_dist = min(
+                        np.linalg.norm(target_final[:2] - pp[:2])
+                        for pp in self.env.pocket_positions
+                    )
+                    print(f"  [MISS] Nearest pocket dist: {nearest_dist * 100:.1f}cm")
 
             self.controller.move_home()
             time.sleep(0.5)
