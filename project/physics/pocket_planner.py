@@ -91,7 +91,7 @@ class PocketShotPlanner:
         CH = MAZE_CUSHION_HEIGHT
         top_z = center[2] + TH / 2 + CH / 2
         thickness = 0.03
-        gap = POCKET_RADIUS * 1.6
+        gap = POCKET_RADIUS * 2  # maze_env와 동일한 포켓 갭
 
         x_min, x_max = CX - L / 2, CX + L / 2
         y_min, y_max = CY - W / 2, CY + W / 2
