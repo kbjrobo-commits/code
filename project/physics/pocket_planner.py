@@ -894,24 +894,32 @@ class PocketShotPlanner:
             if np.linalg.norm(ready) > SAFE_RADIUS:
                 continue
 
-            # 벽 근접 타격 방지 (cushion_planner에서 가져온 로직)
+            # 벽 근접 타격 방지 — 벽에 수직으로 향하는 샷만 차단
+            # 벽에 평행(따라치기)하거나 벽에서 멀어지는 방향은 허용
             sd2 = strike_dir[:2]
             cue2 = cue_pos[:2]
-            dir_thresh = 0.1
             wall_margin = 0.03
             wall_too_close = False
             dx_max = self.bounds['x_max'] - cue2[0]
             dx_min = cue2[0] - self.bounds['x_min']
             dy_max = self.bounds['y_max'] - cue2[1]
             dy_min = cue2[1] - self.bounds['y_min']
-            if sd2[0] > dir_thresh and dx_max < wall_margin:
-                wall_too_close = True
-            elif sd2[0] < -dir_thresh and dx_min < wall_margin:
-                wall_too_close = True
-            if sd2[1] > dir_thresh and dy_max < wall_margin:
-                wall_too_close = True
-            elif sd2[1] < -dir_thresh and dy_min < wall_margin:
-                wall_too_close = True
+            # X축 벽: 큐볼이 벽에 3cm 이내이고, 타격 방향의 벽 수직 성분이 지배적(>70%)
+            sd2_norm = np.linalg.norm(sd2)
+            if sd2_norm > 1e-6:
+                sd2_unit = sd2 / sd2_norm
+                # +x 벽 근처에서 +x 방향으로 치는 경우
+                if dx_max < wall_margin and sd2_unit[0] > 0.7:
+                    wall_too_close = True
+                # -x 벽 근처에서 -x 방향으로 치는 경우
+                if dx_min < wall_margin and sd2_unit[0] < -0.7:
+                    wall_too_close = True
+                # +y 벽 근처에서 +y 방향으로 치는 경우
+                if dy_max < wall_margin and sd2_unit[1] > 0.7:
+                    wall_too_close = True
+                # -y 벽 근처에서 -y 방향으로 치는 경우
+                if dy_min < wall_margin and sd2_unit[1] < -0.7:
+                    wall_too_close = True
             if wall_too_close:
                 continue
 
@@ -964,8 +972,8 @@ class PocketShotPlanner:
                         max_a = (cue2[axis] - (self.bounds['x_max' if axis == 0 else 'y_max'] - tip_margin)) / sd2[axis]
                     if max_a > 0:
                         safe_approach = min(safe_approach, max_a)
-            # 벽 근처에서는 approach를 줄여야 하므로 10cm로 강제 확대하지 않는다.
-            safe_approach = max(0.02, min(STRIKE_APPROACH_DIST, safe_approach))
+            # 벽 근처에서는 approach를 줄여야 하므로 최소 5mm까지 허용
+            safe_approach = max(0.005, min(STRIKE_APPROACH_DIST, safe_approach))
 
             # 다양성: 1도 이내 중복 방지 (후보 5개 확보를 위해 기존 3도보다 완화)
             bucket = round(angle_deg)
