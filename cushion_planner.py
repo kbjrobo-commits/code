@@ -25,7 +25,7 @@ class CushionShotPlanner:
         self.ball_r = ball_radius
 
     def _reject_side_pocket_path(self, cue_pos, angle_rad):
-        """첫 쿠션 후 사이드 포켓(홀) 방향 경로 제외.""" !!
+        """첫 쿠션 후 사이드 포켓(홀) 방향 경로 제외."""
         return rejects_first_cushion_toward_side_pocket(
             cue_pos, angle_rad, self.bounds, self.ball_r)
 
@@ -116,31 +116,27 @@ class CushionShotPlanner:
                 if np.linalg.norm(ready_pos[:2]) > SAFE_RADIUS:
                     continue
 
-                # 벽 근접 타격 방지: 공이 타격 방향 벽에 가까우면
-                # 도구-벽-공 샌드위치로 예측 불가 → 해당 방향 제외
-                wall_margin = 0.03  # 3cm 기본 마진
+                # 벽 근접 타격 방지 — 벽에 수직으로 향하는 샷만 차단
+                # 벽에 평행(따라치기)하거나 벽에서 멀어지는 방향은 허용
+                wall_margin = 0.03
                 sd2 = strike_dir[:2]
                 cue2 = cue_3d[:2]
-                dir_thresh = 0.1  # 방향 임계치 (0.1 = ~5.7° 이상 벽 쪽이면 필터)
                 wall_too_close = False
-                # 각 벽 거리 계산
                 dx_max = bounds['x_max'] - cue2[0]
                 dx_min = cue2[0] - bounds['x_min']
                 dy_max = bounds['y_max'] - cue2[1]
                 dy_min = cue2[1] - bounds['y_min']
-                # 벽에 매우 가까우면(15mm) 마진 확대
-                eff_margin_xmax = 0.05 if dx_max < 0.015 else wall_margin
-                eff_margin_xmin = 0.05 if dx_min < 0.015 else wall_margin
-                eff_margin_ymax = 0.05 if dy_max < 0.015 else wall_margin
-                eff_margin_ymin = 0.05 if dy_min < 0.015 else wall_margin
-                if sd2[0] > dir_thresh and dx_max < eff_margin_xmax:
-                    wall_too_close = True
-                elif sd2[0] < -dir_thresh and dx_min < eff_margin_xmin:
-                    wall_too_close = True
-                if sd2[1] > dir_thresh and dy_max < eff_margin_ymax:
-                    wall_too_close = True
-                elif sd2[1] < -dir_thresh and dy_min < eff_margin_ymin:
-                    wall_too_close = True
+                sd2_norm = np.linalg.norm(sd2)
+                if sd2_norm > 1e-6:
+                    sd2_unit = sd2 / sd2_norm
+                    if dx_max < wall_margin and sd2_unit[0] > 0.7:
+                        wall_too_close = True
+                    if dx_min < wall_margin and sd2_unit[0] < -0.7:
+                        wall_too_close = True
+                    if dy_max < wall_margin and sd2_unit[1] > 0.7:
+                        wall_too_close = True
+                    if dy_min < wall_margin and sd2_unit[1] < -0.7:
+                        wall_too_close = True
                 if wall_too_close:
                     continue
 
@@ -157,14 +153,15 @@ class CushionShotPlanner:
                             max_a = (cue2[axis] - (bounds['x_max' if axis==0 else 'y_max'] - tip_margin)) / sd2[axis]
                         if max_a > 0:
                             safe_approach = min(safe_approach, max_a)
-                min_approach = 0.10  # 최소 10cm — PD 수렴 + 도구 간섭 방지
+                min_approach = 0.005  # 최소 5mm — 벽에 붙은 공도 타격 허용
                 safe_approach = max(min_approach, safe_approach)
-                # 최소 접근거리에서도 벽 밖이면 제외
+                # 최소 접근거리에서도 벽 밖이면 제외 (20mm 마진)
                 tip_check = cue2 - sd2 * safe_approach
-                if (tip_check[0] < bounds['x_min'] + tip_margin or
-                    tip_check[0] > bounds['x_max'] - tip_margin or
-                    tip_check[1] < bounds['y_min'] + tip_margin or
-                    tip_check[1] > bounds['y_max'] - tip_margin):
+                tip_wall_margin = tip_margin + 0.02  # 20mm 추가 마진
+                if (tip_check[0] < bounds['x_min'] - tip_wall_margin or
+                    tip_check[0] > bounds['x_max'] + tip_wall_margin or
+                    tip_check[1] < bounds['y_min'] - tip_wall_margin or
+                    tip_check[1] > bounds['y_max'] + tip_wall_margin):
                     continue
                 # approach_dist가 줄었을 때: 저장 + score 페널티
                 if safe_approach < STRIKE_APPROACH_DIST:
