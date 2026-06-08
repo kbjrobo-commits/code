@@ -288,6 +288,25 @@ def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 
 
     profile = pipeline.start(config)
 
+    # RGB 센서 설정 (노출, 화이트밸런스, 게인 고정)
+    rgb_sensor = None
+    for senor in profile.get_device().query_sensors():
+        if senor.get_info(rs.camera_info.name) == 'RGB Camera':
+            rgb_sensor = senor
+            break
+    
+    if rgb_sensor is not None:
+        rgb_sensor.set_option(rs.option.enable_auto_exposure, 0)
+        rgb_sensor.set_option(rs.option.enable_auto_white_balance, 0)
+        rgb_sensor.set_option(rs.option.exposure, 7000)
+        rgb_sensor.set_option(rs.option.white_balance, 4500)
+        rgb_sensor.set_option(rs.option.gain, 32)
+    
+    print("Realsense initialized and configured.")
+    print("Exposure:", rgb_sensor.get_option(rs.option.exposure))
+    print("White Balance:", rgb_sensor.get_option(rs.option.white_balance))
+    print("Gain:", rgb_sensor.get_option(rs.option.gain))
+
     # calibration 적용
     newK, roi = cv2.getOptimalNewCameraMatrix(
         K,
