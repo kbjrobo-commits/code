@@ -979,19 +979,29 @@ class PocketShotPlanner:
                 continue
 
             # safe_approach_dist 동적 계산
+            # 실제 툴팁 후퇴 거리 = TOOL_HORIZONTAL_EXT + safe_approach
+            # 이 전체 거리가 벽 안에 들어와야 함
             tip_margin = TOOL_TIP_RADIUS
             safe_approach = STRIKE_APPROACH_DIST
+            wall_impossible = False
             for axis in [0, 1]:
                 if abs(sd2[axis]) > 1e-6:
                     if sd2[axis] > 0:
-                        max_a = (cue2[axis] - (self.bounds['x_min' if axis == 0 else 'y_min'] + tip_margin)) / sd2[axis]
+                        # 어프로치는 -axis 방향 → x_min/y_min 벽과 충돌 가능
+                        room = (cue2[axis] - (self.bounds['x_min' if axis == 0 else 'y_min'] + tip_margin)) / sd2[axis]
                     else:
-                        max_a = (cue2[axis] - (self.bounds['x_max' if axis == 0 else 'y_max'] - tip_margin)) / sd2[axis]
-                    if max_a > 0:
+                        # 어프로치는 +axis 방향 → x_max/y_max 벽과 충돌 가능
+                        room = (cue2[axis] - (self.bounds['x_max' if axis == 0 else 'y_max'] - tip_margin)) / sd2[axis]
+                    # room = 큐볼~벽 사이 총 여유. 여기서 TOOL_HORIZONTAL_EXT를 빼야 approach용 여유가 나옴
+                    max_a = room - TOOL_HORIZONTAL_EXT
+                    if max_a >= 0.005:
                         safe_approach = min(safe_approach, max_a)
                     else:
-                        # 큐볼이 벽 마진 안에 있음 → approach 여유 없음, 최소화
-                        safe_approach = min(safe_approach, 0.005)
+                        # TOOL_HORIZONTAL_EXT만으로도 벽을 뚫음 → 이 궤적은 물리적 불가
+                        wall_impossible = True
+                        break
+            if wall_impossible:
+                continue
             # 벽 근처에서는 approach를 줄여야 하므로 최소 5mm까지 허용
             safe_approach = max(0.005, min(STRIKE_APPROACH_DIST, safe_approach))
 
