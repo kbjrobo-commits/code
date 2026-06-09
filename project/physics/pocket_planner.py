@@ -989,6 +989,9 @@ class PocketShotPlanner:
                         max_a = (cue2[axis] - (self.bounds['x_max' if axis == 0 else 'y_max'] - tip_margin)) / sd2[axis]
                     if max_a > 0:
                         safe_approach = min(safe_approach, max_a)
+                    else:
+                        # 큐볼이 벽 마진 안에 있음 → approach 여유 없음, 최소화
+                        safe_approach = min(safe_approach, 0.005)
             # 벽 근처에서는 approach를 줄여야 하므로 최소 5mm까지 허용
             safe_approach = max(0.005, min(STRIKE_APPROACH_DIST, safe_approach))
 
