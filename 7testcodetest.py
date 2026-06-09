@@ -160,7 +160,7 @@ def replay_trajectory_on_real(q_traj_deg, q_follow_deg, phases, label="", strike
         wait_indy()
     else:
         indy.movel([float(x) for x in p_target],
-                    vel_ratio=100 * strike_speed, acc_ratio=700)
+                    vel_ratio=100 * strike_speed, acc_ratio=600)
         time.sleep(0.2)
         t0 = time.time()
         while time.time() - t0 < 3.0:
@@ -818,7 +818,7 @@ if DEMO_TYPE in ('pocket_phase1', 'pocket_phase2'):
                 q_prev = q_ready_rad.copy()
                 q_strike_traj = []
                 for T in full_traj:
-                    for _ in range(10):
+                    for _ in range(5):
                         q_prev = ik.solve_step(q_prev, T)
                     q_strike_traj.append(q_prev.copy())
 
