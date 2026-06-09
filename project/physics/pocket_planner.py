@@ -1,3 +1,4 @@
+#<포켓 플래너 수정 전 0607 1543>
 """
 포켓볼 타격 탐색기 — Headless PyBullet 공 직접 시뮬
 ===================================================
@@ -8,9 +9,42 @@ Phase 2: 목적구를 마커 위치에 정밀 정지 (다른 공 접촉 금지)
 import numpy as np
 import pybullet as p
 import sys, os
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from project.config import *
+from project.physics.contact_model import (
+    apply_ball_dynamics, apply_table_dynamics, apply_cushion_dynamics)
+
+# ----------------------------------------------------------------
+# Escape-shot defaults
+# config.py에 같은 이름이 있으면 그 값을 사용하고,
+# 없으면 아래 기본값을 사용한다.
+# ----------------------------------------------------------------
+try:
+    ESCAPE_WALL_GAP_THRESHOLD
+except NameError:
+    ESCAPE_WALL_GAP_THRESHOLD = MAZE_BALL_RADIUS + 0.015      # 공 표면-벽 간격 1cm 이하
+
+try:
+    ESCAPE_STRIKE_HEIGHT_OFFSET
+except NameError:
+    ESCAPE_STRIKE_HEIGHT_OFFSET = 0.017   # 기존 strike height보다 +1.7cm
+
+try:
+    ESCAPE_BALL_SPEED
+except NameError:
+    ESCAPE_BALL_SPEED = 0.2              # escape용 공 속도
+
+try:
+    ESCAPE_SAFE_APPROACH_DIST
+except NameError:
+    ESCAPE_SAFE_APPROACH_DIST = 0.035
+
+try:
+    ESCAPE_FOLLOW_DIST
+except NameError:
+    ESCAPE_FOLLOW_DIST = 0.02
 
 
 class PocketShotPlanner:
@@ -51,15 +85,14 @@ class PocketShotPlanner:
                                      physicsClientId=sim)
         table_id = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=col,
                                      basePosition=center, physicsClientId=sim)
-        p.changeDynamics(table_id, -1, lateralFriction=POCKET_DEMO_FRICTION,
-                         rollingFriction=POCKET_DEMO_ROLLING_FRICTION,
-                         restitution=0.5, physicsClientId=sim)
+        apply_table_dynamics(table_id, sim)
 
         # 포켓 갭 쿠션 (maze_env._create_cushions_with_pockets와 동일)
         CH = MAZE_CUSHION_HEIGHT
         top_z = center[2] + TH / 2 + CH / 2
         thickness = 0.03
-        gap = POCKET_RADIUS * 2
+        gap = POCKET_RADIUS * 1.5  # 코너 포켓: 보수적 마진
+        gap_side = POCKET_RADIUS * 3.0  # 사이드 포켓: 실제 테이블처럼 넓게 개방
 
         x_min, x_max = CX - L / 2, CX + L / 2
         y_min, y_max = CY - W / 2, CY + W / 2
@@ -71,8 +104,7 @@ class PocketShotPlanner:
                                        physicsClientId=sim)
             cid = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=c,
                                     basePosition=pos, physicsClientId=sim)
-            p.changeDynamics(cid, -1, restitution=POCKET_DEMO_CUSHION_RESTITUTION,
-                             physicsClientId=sim)
+            apply_cushion_dynamics(cid, sim)
             cushion_ids.append(cid)
 
         # 상/하변: 코너2 갭 → 2세그먼트
@@ -83,8 +115,8 @@ class PocketShotPlanner:
             _add([x_max - gap - seg_len / 2, y_pos, top_z],
                  [seg_len / 2, thickness / 2, CH / 2])
 
-        # 좌/우변: 코너2 + 사이드1 갭 → 2세그먼트
-        seg_len_side = (W - 2 * gap - gap) / 2
+        # 좌/우변: 코너2 갭 + 사이드1 갭(넓음) → 2세그먼트
+        seg_len_side = (W - 2 * gap - gap_side) / 2
         for x_pos in [x_min - thickness / 2, x_max + thickness / 2]:
             _add([x_pos, y_min + gap + seg_len_side / 2, top_z],
                  [thickness / 2, seg_len_side / 2, CH / 2])
@@ -111,14 +143,7 @@ class PocketShotPlanner:
         bid = p.createMultiBody(baseMass=MAZE_BALL_MASS,
                                 baseCollisionShapeIndex=col,
                                 basePosition=list(pos), physicsClientId=sim)
-        p.changeDynamics(bid, -1,
-                         lateralFriction=POCKET_DEMO_FRICTION,
-                         restitution=POCKET_DEMO_BALL_RESTITUTION,
-                         rollingFriction=POCKET_DEMO_ROLLING_FRICTION,
-                         spinningFriction=0.01,
-                         ccdSweptSphereRadius=MAZE_BALL_RADIUS * 0.5,
-                         contactProcessingThreshold=0,
-                         physicsClientId=sim)
+        apply_ball_dynamics(bid, sim)
         return bid
 
     def _set_rolling_velocity(self, sim, ball_id, speed, angle):
@@ -151,6 +176,53 @@ class PocketShotPlanner:
                     return i
         return -1
 
+    def _compute_alignment_metric(self, cue_pos, target_pos, pocket_positions, pocket_idx=None):
+        """포켓-목적구-큐볼 정렬 품질 계산.
+
+        alignment_error_deg:
+            cue -> target 방향과 target -> pocket 방향 사이의 각도.
+            0도에 가까울수록 흰공-목적구-포켓이 거의 일직선이다.
+
+        alignment_quality:
+            0~1 정규화 점수. 1에 가까울수록 직선샷에 가깝다.
+        """
+        cue_xy = np.array(cue_pos[:2], dtype=float)
+        target_xy = np.array(target_pos[:2], dtype=float)
+
+        cue_to_target = target_xy - cue_xy
+        cue_dist = np.linalg.norm(cue_to_target)
+        if cue_dist < 1e-9:
+            return 0.0, 180.0, -1
+        cue_to_target = cue_to_target / cue_dist
+
+        indices = [pocket_idx] if pocket_idx is not None and pocket_idx >= 0 else range(len(pocket_positions))
+
+        best_quality = 0.0
+        best_error_deg = 180.0
+        best_idx = -1
+
+        for pi in indices:
+            pp = pocket_positions[pi]
+            target_to_pocket = np.array(pp[:2], dtype=float) - target_xy
+            pocket_dist = np.linalg.norm(target_to_pocket)
+            if pocket_dist < 1e-9:
+                continue
+            target_to_pocket = target_to_pocket / pocket_dist
+
+            cosang = float(np.clip(np.dot(cue_to_target, target_to_pocket), -1.0, 1.0))
+            err_rad = float(np.arccos(cosang))
+            err_deg = float(np.degrees(err_rad))
+
+            # 0도 = 완전 직선, 90도 이상 = 매우 어려운 컷으로 간주
+            quality = max(0.0, 1.0 - err_deg / 90.0)
+
+            if quality > best_quality:
+                best_quality = quality
+                best_error_deg = err_deg
+                best_idx = int(pi)
+
+        return best_quality, best_error_deg, best_idx
+
     # ================================================================
     # Phase 1: 포켓 샷 탐색
     # ================================================================
@@ -171,6 +243,29 @@ class PocketShotPlanner:
         cue_3d = np.array(cue_pos).flatten()
         target_3d = np.array(target_pos).flatten()
         others_3d = [np.array(o).flatten() for o in other_ball_positions]
+
+        # ------------------------------------------------------------
+        # Escape shot priority
+        # 큐볼 표면과 벽 사이 간격이 1cm 이하이면 일반 포켓샷 탐색을 하지 않고,
+        # 테이블 중앙 방향으로 큐볼을 빼내는 escape 후보만 반환한다.
+        # ------------------------------------------------------------
+        near_wall, _, wall_info = self._detect_cue_wall_proximity(cue_3d)
+        if near_wall:
+            t0 = time.time()
+            candidates = self._make_escape_candidates(cue_3d)
+            elapsed = time.time() - t0
+            if candidates:
+                best = candidates[0]
+                print(
+                    f"  [SearchResult] mode=ESCAPE, total_sims=0, "
+                    f"final_candidates={len(candidates)}, "
+                    f"selected_angle={best.get('angle_deg', float('nan')):.2f}deg, "
+                    f"score={best.get('score', 0):.0f}, "
+                    f"escape=True, time={elapsed:.2f}s"
+                )
+            else:
+                print("  [SearchResult] mode=ESCAPE, no valid escape candidate")
+            return candidates
 
         sim, table_id, cushion_ids, pocket_positions = self._create_pocket_env()
         surface_z = MAZE_TABLE_SURFACE_HEIGHT + MAZE_TABLE_HEIGHT / 2
@@ -205,32 +300,73 @@ class PocketShotPlanner:
             angle = np.arctan2(cue_to_ghost[1], cue_to_ghost[0])
             ideal_angles.append(angle)
 
-        # 각 이상 각도 주변 ±15도를 0.5도 간격으로 탐색 + 글로벌 보충
-        search_angles = set()
-        for base in ideal_angles:
-            for offset_deg in np.arange(-15, 15.5, 0.5):
-                search_angles.add(base + np.radians(offset_deg))
-        # 글로벌 보충: 전체를 2도 간격 (놓친 각도 커버)
-        for a in np.linspace(0, 2 * np.pi, 180, endpoint=False):
-            search_angles.add(a)
-        search_angles = sorted(search_angles)
-
-        speed_center = 1.87
+        # ============================================================
+        # 계층적 각도 탐색 (Goal 4)
+        #   Tier A 다이렉트 로컬 → Tier B 확장 로컬 → Tier C 글로벌 폴백.
+        #   쿠션 반발이 낮고 품질이 불안정하므로 다이렉트 샷을 우선하고,
+        #   상위 티어에서 포켓 성공이 없을 때만 다음 티어로 확장한다.
+        # ============================================================
+        speed_center = 1.25
         test_speeds = [speed_center, speed_center * 1.05, speed_center * 0.95]
+        POCKET_SUCCESS_SCORE = 100000
 
-        print(f"  [PocketSearch] {len(ideal_angles)} ideal angles, "
-              f"{len(search_angles)} total search angles × {len(test_speeds)} speeds")
-
+        t0 = time.time()
         results = []
-        for spd in test_speeds:
-            for angle in search_angles:
-                score, info = self._simulate_pocket_shot(
-                    sim, cue_id, target_id, other_ids, cushion_ids,
-                    pocket_positions, cue_3d, target_3d, others_3d,
-                    angle, spd, surface_z)
-                results.append({
-                    'angle': angle, 'speed': spd, 'score': score, **info
-                })
+        scanned_buckets = set()  # 0.5deg 각도 버킷 중복 시뮬 방지
+
+        def _angles_around(bases, width_deg, step_deg):
+            out = []
+            for base in bases:
+                for off in np.arange(-width_deg, width_deg + step_deg / 2, step_deg):
+                    out.append(base + np.radians(off))
+            return out
+
+        def _scan(angle_set):
+            new_angles = []
+            for a in angle_set:
+                bucket = round(np.degrees(a) * 2) / 2
+                if bucket in scanned_buckets:
+                    continue
+                scanned_buckets.add(bucket)
+                new_angles.append(a)
+            tier_results = []
+            for spd in test_speeds:
+                for angle in new_angles:
+                    score, info = self._simulate_pocket_shot(
+                        sim, cue_id, target_id, other_ids, cushion_ids,
+                        pocket_positions, cue_3d, target_3d, others_3d,
+                        angle, spd, surface_z)
+                    tier_results.append({
+                        'angle': angle, 'speed': spd, 'score': score, **info
+                    })
+            results.extend(tier_results)
+            return new_angles, tier_results
+
+        def _n_success(recs):
+            return sum(1 for r in recs if r['score'] >= POCKET_SUCCESS_SCORE)
+
+        # --- Tier A: 다이렉트 로컬 (±10° @0.2°) ---
+        a_angles, rA = _scan(_angles_around(ideal_angles, 10.0, 0.2))
+        search_mode = 'DIRECT'
+        print(f"  [Search:DIRECT] {len(ideal_angles)} ideal dirs, range=±10.0deg@0.2deg, "
+              f"angles={len(a_angles)}, candidates={len(rA)}, pocket_hits={_n_success(rA)}")
+
+        # --- Tier B: 확장 로컬 (±20° @0.2°) ---
+        if _n_success(results) == 0:
+            b_angles, rB = _scan(_angles_around(ideal_angles, 20.0, 0.2))
+            search_mode = 'EXPANDED'
+            print(f"  [Search:EXPANDED] range=±20.0deg@0.2deg, "
+                  f"angles={len(b_angles)}, candidates={len(rB)}, pocket_hits={_n_success(rB)}")
+
+        # --- Tier C: 글로벌/쿠션 폴백 (360° @2.0°) ---
+        if _n_success(results) == 0:
+            c_set = list(np.linspace(0, 2 * np.pi, 180, endpoint=False))
+            c_angles, rC = _scan(c_set)
+            search_mode = 'GLOBAL'
+            print(f"  [Search:GLOBAL] range=360deg@2.0deg (fallback), "
+                  f"angles={len(c_angles)}, candidates={len(rC)}, pocket_hits={_n_success(rC)}")
+
+        self._last_search_mode = search_mode
 
         # 상위 각도 정밀 탐색 (0.1도 간격)
         results.sort(key=lambda r: r['score'], reverse=True)
@@ -266,8 +402,26 @@ class PocketShotPlanner:
         self._target_ball_2d = target_3d[:2]
         self._other_balls_2d = [o[:2] for o in others_3d]
 
-        # Filter + format
-        return self._format_candidates(results, cue_3d)
+        candidates = self._format_candidates(results, cue_3d)
+        elapsed = time.time() - t0
+
+        if candidates:
+            best = candidates[0]
+            print(
+                f"  [SearchResult] mode={search_mode}, total_sims={len(results)}, "
+                f"final_candidates={len(candidates)}, "
+                f"selected_angle={best.get('angle_deg', float('nan')):.2f}deg, "
+                f"score={best.get('score', 0):.0f}, "
+                f"escape={best.get('is_escape_shot', False)}, "
+                f"time={elapsed:.2f}s"
+            )
+        else:
+            print(
+                f"  [SearchResult] mode={search_mode}, total_sims={len(results)}, "
+                f"no valid candidate, time={elapsed:.2f}s"
+            )
+
+        return candidates
 
     def _simulate_pocket_shot(self, sim, cue_id, target_id, other_ids,
                                cushion_ids, pocket_positions,
@@ -284,12 +438,20 @@ class PocketShotPlanner:
                                               physicsClientId=sim)
             p.resetBaseVelocity(bid, [0,0,0], [0,0,0], physicsClientId=sim)
 
+        # 시뮬 시작 전 초기 쿠션 접촉 기록 (벽에 붙은 큐볼의 기존 접촉 제외)
+        # 속도 부여 전에 기록해야 공이 아직 움직이지 않은 상태의 접촉만 잡힘
+        initial_cushion_contacts = set()
+        for c in p.getContactPoints(bodyA=cue_id, physicsClientId=sim):
+            if c[2] in cushion_ids:
+                initial_cushion_contacts.add(c[2])
+
         # 큐볼 속도 부여 (순수 구름 조건)
         self._set_rolling_velocity(sim, cue_id, speed, angle)
 
         # 시뮬 + 접촉 추적
         hit_target = False
         illegal_contact = False
+        cue_hit_cushion_before_target = False
         cue_scratched = False
         target_min_pocket_dist = float('inf')  # 경로 상 최소 포켓 거리
         target_closest_pocket_idx = -1
@@ -300,31 +462,30 @@ class PocketShotPlanner:
             p.stepSimulation(physicsClientId=sim)
 
             # 큐볼 접촉 체크
+            # - 큐볼이 타겟에 먼저 맞기 전에 다른 공에 접촉하면 illegal
+            # - 타겟에 맞은 후에는 큐볼이 다른 공에 맞아도 허용 (당구 규칙)
             cue_contacts = p.getContactPoints(bodyA=cue_id, physicsClientId=sim)
             for c in cue_contacts:
                 other_body = c[2]
                 if other_body == target_id:
                     hit_target = True
-                elif other_body in other_ids:
+                elif other_body in cushion_ids and not hit_target:
+                    if other_body not in initial_cushion_contacts:
+                        cue_hit_cushion_before_target = True
+                elif other_body in other_ids and not hit_target:
+                    # 타겟을 먼저 맞추기 전에 다른 공 접촉 = illegal
                     illegal_contact = True
                     break
             if illegal_contact:
                 break
 
-            # 목적구 접촉 체크 (목적구가 다른 공에 부딪히는 것도 금지)
-            if hit_target:
-                target_contacts = p.getContactPoints(bodyA=target_id, physicsClientId=sim)
-                for c in target_contacts:
-                    if c[2] in other_ids:
-                        illegal_contact = True
-                        break
-                if illegal_contact:
-                    break
+            # 목적구가 다른 공에 부딪히는 것은 허용
+            # (타겟이 홀로 가는 경로에 다른 공이 있어도 해를 찾을 수 있음)
 
             # 큐볼 포켓 스크래치 체크
             cue_pos_now, _ = p.getBasePositionAndOrientation(cue_id, physicsClientId=sim)
             for pp in pocket_positions:
-                if np.linalg.norm(np.array(cue_pos_now[:2]) - pp[:2]) < POCKET_RADIUS:
+                if np.linalg.norm(np.array(cue_pos_now[:2]) - pp[:2]) < POCKET_CAPTURE_RADIUS:
                     cue_scratched = True
                     break
             if cue_scratched:
@@ -337,7 +498,7 @@ class PocketShotPlanner:
                 if d < target_min_pocket_dist:
                     target_min_pocket_dist = d
                     target_closest_pocket_idx = pi
-                if d < POCKET_RADIUS:
+                if d < POCKET_CAPTURE_RADIUS:
                     # 포켓 진입! 공을 테이블 아래로 이동
                     p.resetBasePositionAndOrientation(
                         target_id, [pp[0], pp[1], surface_z - 0.1],
@@ -372,7 +533,15 @@ class PocketShotPlanner:
         # XY 기반 큐볼 스크래치 판정 (최종 위치)
         if not cue_scratched:
             for pp in pocket_positions:
-                if np.linalg.norm(np.array(cue_final[:2]) - pp[:2]) < POCKET_RADIUS:
+                if np.linalg.norm(np.array(cue_final[:2]) - pp[:2]) < POCKET_CAPTURE_RADIUS:
+                    cue_scratched = True
+                    break
+        # GUI 포켓 갭(2.0x)이 시뮬(1.6x)보다 넓어 시뮬에서 놓칠 수 있음
+        # GUI 기준 넓은 반경으로 추가 판정하여 자살골 방지
+        if not cue_scratched:
+            gui_scratch_radius = POCKET_RADIUS * 1.5
+            for pp in pocket_positions:
+                if np.linalg.norm(np.array(cue_final[:2]) - pp[:2]) < gui_scratch_radius:
                     cue_scratched = True
                     break
 
@@ -383,23 +552,32 @@ class PocketShotPlanner:
             for i, pp in enumerate(pocket_positions):
                 dist_to_pocket = np.linalg.norm(
                     np.array(target_final[:2]) - pp[:2])
-                if dist_to_pocket < POCKET_RADIUS:
+                if dist_to_pocket < POCKET_CAPTURE_RADIUS:
                     target_pocketed = True
                     pocket_idx = i
                     break
         if not target_pocketed and hit_target:
             # 경로 상 최근접 체크 (시뮬 중 포켓을 스쳐 지나간 경우)
-            if target_min_pocket_dist < POCKET_RADIUS:
+            if target_min_pocket_dist < POCKET_CAPTURE_RADIUS:
                 target_pocketed = True
                 pocket_idx = target_closest_pocket_idx
+
+        alignment_idx = pocket_idx if pocket_idx >= 0 else target_closest_pocket_idx
+        alignment_quality, alignment_error_deg, alignment_pocket_idx = self._compute_alignment_metric(
+            cue_start, target_start, pocket_positions, alignment_idx
+        )
 
         score = 0
         if illegal_contact:
             score = -10000
+        elif cue_hit_cushion_before_target:
+            score = -1000
         elif cue_scratched:
-            score = -5000
+            score = -3000
         elif target_pocketed:
-            score = 100000  # 포켓 성공 — 항상 최고 우선
+            # 포켓 성공 후보 내부에서도 흰공-목적구-포켓이 직선에 가까울수록 우선.
+            # 최대 +30000점 보너스.
+            score = 100000 + int(20000 * alignment_quality)
         elif hit_target:
             # 포켓 진입 실패지만 타격함 — 포켓까지 거리로 부분 점수 (상한 4000)
             min_pocket_dist = min(
@@ -416,9 +594,15 @@ class PocketShotPlanner:
             'target_pocketed': target_pocketed,
             'pocket_idx': pocket_idx,
             'illegal_contact': illegal_contact,
+            'cue_hit_cushion_before_target': cue_hit_cushion_before_target,
             'cue_scratched': cue_scratched,
             'cue_final': [cue_final[0], cue_final[1]],
             'target_final': [target_final[0], target_final[1]],
+            'alignment_quality': alignment_quality,
+            'alignment_error_deg': alignment_error_deg,
+            'alignment_pocket_idx': alignment_pocket_idx,
+            'target_min_pocket_dist': target_min_pocket_dist,
+            'target_closest_pocket_idx': target_closest_pocket_idx,
             'cue_path': cue_path,
             'target_path': target_path,
         }
@@ -606,7 +790,7 @@ class PocketShotPlanner:
 
             cue_pos_now, _ = p.getBasePositionAndOrientation(cue_id, physicsClientId=sim)
             for pp in pocket_positions:
-                if np.linalg.norm(np.array(cue_pos_now[:2]) - pp[:2]) < POCKET_RADIUS:
+                if np.linalg.norm(np.array(cue_pos_now[:2]) - pp[:2]) < POCKET_CAPTURE_RADIUS:
                     cue_scratched = True
                     break
             if cue_scratched:
@@ -673,13 +857,32 @@ class PocketShotPlanner:
         """결과를 state_machine이 기대하는 후보 형식으로 변환."""
         SAFE_RADIUS = 0.65
 
-        # 양수 score만 필터
-        positive = [r for r in results if r['score'] > 0]
+        # 후보 필터링: score>0 후보를 우선하고, 없으면 legal 후보로 fallback.
+        # score<=0 (빗나간/illegal/scratch)인 후보가 alignment만 좋아서
+        # 선택되면 자살골이 발생하므로, score>0 대안이 있으면 제외한다.
+        scored = [r for r in results if r['score'] > 0]
+        if scored:
+            positive = scored
+        else:
+            # score>0인 후보가 없으면 legal+non-scratch 후보로 fallback
+            positive = [
+                r for r in results
+                if not r.get('illegal_contact', False)
+                and not r.get('cue_hit_cushion_before_target', False)
+                and not r.get('cue_scratched', False)
+            ]
         if not positive:
-            positive = sorted(results, key=lambda r: r['score'], reverse=True)[:5]
+            positive = sorted(results, key=lambda r: r['score'], reverse=True)[:7]
 
-        # 도달가능성 + 다양성 필터
-        positive.sort(key=lambda r: r['score'], reverse=True)
+        # 도달가능성 + 다양성 필터: score 우선, alignment은 tiebreak
+        positive.sort(
+            key=lambda r: (
+                1 if r.get('target_pocketed', False) else 0,
+                r.get('score', -float('inf')),
+                r.get('alignment_quality', 0.0),
+            ),
+            reverse=True
+        )
         candidates = []
         seen_angles = set()
 
@@ -708,24 +911,32 @@ class PocketShotPlanner:
             if np.linalg.norm(ready) > SAFE_RADIUS:
                 continue
 
-            # 벽 근접 타격 방지 (cushion_planner에서 가져온 로직)
+            # 벽 근접 타격 방지 — 벽에 수직으로 향하는 샷만 차단
+            # 벽에 평행(따라치기)하거나 벽에서 멀어지는 방향은 허용
             sd2 = strike_dir[:2]
             cue2 = cue_pos[:2]
-            dir_thresh = 0.1
             wall_margin = 0.03
             wall_too_close = False
             dx_max = self.bounds['x_max'] - cue2[0]
             dx_min = cue2[0] - self.bounds['x_min']
             dy_max = self.bounds['y_max'] - cue2[1]
             dy_min = cue2[1] - self.bounds['y_min']
-            if sd2[0] > dir_thresh and dx_max < wall_margin:
-                wall_too_close = True
-            elif sd2[0] < -dir_thresh and dx_min < wall_margin:
-                wall_too_close = True
-            if sd2[1] > dir_thresh and dy_max < wall_margin:
-                wall_too_close = True
-            elif sd2[1] < -dir_thresh and dy_min < wall_margin:
-                wall_too_close = True
+            # X축 벽: 큐볼이 벽에 3cm 이내이고, 타격 방향의 벽 수직 성분이 지배적(>70%)
+            sd2_norm = np.linalg.norm(sd2)
+            if sd2_norm > 1e-6:
+                sd2_unit = sd2 / sd2_norm
+                # +x 벽 근처에서 +x 방향으로 치는 경우
+                if dx_max < wall_margin and sd2_unit[0] > 0.7:
+                    wall_too_close = True
+                # -x 벽 근처에서 -x 방향으로 치는 경우
+                if dx_min < wall_margin and sd2_unit[0] < -0.7:
+                    wall_too_close = True
+                # +y 벽 근처에서 +y 방향으로 치는 경우
+                if dy_max < wall_margin and sd2_unit[1] > 0.7:
+                    wall_too_close = True
+                # -y 벽 근처에서 -y 방향으로 치는 경우
+                if dy_min < wall_margin and sd2_unit[1] < -0.7:
+                    wall_too_close = True
             if wall_too_close:
                 continue
 
@@ -768,22 +979,36 @@ class PocketShotPlanner:
                 continue
 
             # safe_approach_dist 동적 계산
+            # 실제 툴팁 후퇴 거리 = TOOL_HORIZONTAL_EXT + safe_approach
+            # 이 전체 거리가 벽 안에 들어와야 함
             tip_margin = TOOL_TIP_RADIUS
             safe_approach = STRIKE_APPROACH_DIST
+            wall_impossible = False
             for axis in [0, 1]:
                 if abs(sd2[axis]) > 1e-6:
                     if sd2[axis] > 0:
-                        max_a = (cue2[axis] - (self.bounds['x_min' if axis == 0 else 'y_min'] + tip_margin)) / sd2[axis]
+                        # 어프로치는 -axis 방향 → x_min/y_min 벽과 충돌 가능
+                        room = (cue2[axis] - (self.bounds['x_min' if axis == 0 else 'y_min'] + tip_margin)) / sd2[axis]
                     else:
-                        max_a = (cue2[axis] - (self.bounds['x_max' if axis == 0 else 'y_max'] - tip_margin)) / sd2[axis]
-                    if max_a > 0:
+                        # 어프로치는 +axis 방향 → x_max/y_max 벽과 충돌 가능
+                        room = (cue2[axis] - (self.bounds['x_max' if axis == 0 else 'y_max'] - tip_margin)) / sd2[axis]
+                    # room = 큐볼~벽 사이 총 여유. 여기서 TOOL_HORIZONTAL_EXT를 빼야 approach용 여유가 나옴
+                    max_a = room - TOOL_HORIZONTAL_EXT
+                    if max_a >= 0.005:
                         safe_approach = min(safe_approach, max_a)
-            safe_approach = max(0.10, safe_approach)
+                    else:
+                        # TOOL_HORIZONTAL_EXT만으로도 벽을 뚫음 → 이 궤적은 물리적 불가
+                        wall_impossible = True
+                        break
+            if wall_impossible:
+                continue
+            # 벽 근처에서는 approach를 줄여야 하므로 최소 5mm까지 허용
+            safe_approach = max(0.005, min(STRIKE_APPROACH_DIST, safe_approach))
 
-            # 다양성: 3도 이내 중복 방지
+            # 다양성: 1도 이내 중복 방지 (후보 5개 확보를 위해 기존 3도보다 완화)
             bucket = round(angle_deg)
             too_close = any(
-                min(abs(angle_deg - s), 360 - abs(angle_deg - s)) < 3
+                min(abs(angle_deg - s), 360 - abs(angle_deg - s)) < 1.0
                 for s in seen_angles
             )
             if too_close:
@@ -814,11 +1039,18 @@ class PocketShotPlanner:
                 'hit_target': r.get('hit_target', False),
                 'target_pocketed': r.get('target_pocketed', False),
                 'pocket_idx': r.get('pocket_idx', -1),
+                'alignment_quality': r.get('alignment_quality', 0.0),
+                'alignment_error_deg': r.get('alignment_error_deg', 180.0),
+                'alignment_pocket_idx': r.get('alignment_pocket_idx', -1),
+                'target_min_pocket_dist': r.get('target_min_pocket_dist'),
+                'target_closest_pocket_idx': r.get('target_closest_pocket_idx'),
                 'precision_distance': r.get('precision_distance'),
                 'illegal_contact': r.get('illegal_contact', False),
+                'cue_hit_cushion_before_target': r.get(
+                    'cue_hit_cushion_before_target', False),
                 'cue_scratched': r.get('cue_scratched', False),
                 'cue_final': r.get('cue_final'),
-                'cushion_count': 0,
+                'cushion_count': 1 if r.get('cue_hit_cushion_before_target') else 0,
                 'hit_t1': r.get('hit_target', False),
                 'hit_t2': False,
                 'events': [],
@@ -827,8 +1059,15 @@ class PocketShotPlanner:
             if len(candidates) >= 25:
                 break
 
-        # 최종 정렬
-        candidates.sort(key=lambda c: -c['score'])
+        # 최종 정렬: 포켓 성공 > 정렬 품질 > score 순서
+        candidates.sort(
+            key=lambda c: (
+                1 if c.get('target_pocketed', False) else 0,
+                c.get('alignment_quality', 0.0),
+                c.get('score', -float('inf')),
+            ),
+            reverse=True
+        )
 
         n_success = sum(1 for c in candidates
                         if c.get('target_pocketed') or
@@ -837,7 +1076,7 @@ class PocketShotPlanner:
         print(f"  [PocketPlanner] {len(candidates)} candidates, {n_success} successes")
         if candidates:
             top = candidates[0]
-            print(f"  Top: angle={top['angle_deg']:.1f}deg, score={top['score']}")
+            print(f"  Top: angle={top['angle_deg']:.1f}deg, score={top['score']}, align={top.get('alignment_error_deg', 180.0):.1f}deg")
 
         return candidates
 
@@ -1072,3 +1311,147 @@ class PocketShotPlanner:
         print(f"  [TrickPlanner] {len(candidates)} diverse candidates")
         return candidates
 
+    def _detect_cue_wall_proximity(self, cue_pos):
+        """큐볼이 테이블 벽에서 1cm 이하인지 확인하고 안쪽 방향을 반환한다.
+
+        Returns:
+            near_wall: bool
+            inward_dir: np.array([dx, dy]) or None
+            wall_info: dict
+        """
+        cue = np.array(cue_pos).flatten()
+        cue_xy = cue[:2]
+        b = self.bounds
+
+        # 공 중심이 아니라 "공 표면과 벽 사이 간격" 기준.
+        # 예: x_min 벽과의 실제 여유 = (공 중심 x - x_min) - 공 반지름
+        distances = {
+            "x_min": cue_xy[0] - b["x_min"] - self.ball_r,
+            "x_max": b["x_max"] - cue_xy[0] - self.ball_r,
+            "y_min": cue_xy[1] - b["y_min"] - self.ball_r,
+            "y_max": b["y_max"] - cue_xy[1] - self.ball_r,
+        }
+
+        near_keys = [
+            key for key, dist in distances.items()
+            if dist <= ESCAPE_WALL_GAP_THRESHOLD
+        ]
+
+        if not near_keys:
+            return False, None, {
+                "distances": distances,
+                "near_keys": [],
+                "min_gap": min(distances.values()),
+            }
+
+        inward = np.zeros(2)
+
+        # x_min 벽에 붙음 → +x 방향으로 탈출
+        if "x_min" in near_keys:
+            inward += np.array([1.0, 0.0])
+
+        # x_max 벽에 붙음 → -x 방향으로 탈출
+        if "x_max" in near_keys:
+            inward += np.array([-1.0, 0.0])
+
+        # y_min 벽에 붙음 → +y 방향으로 탈출
+        if "y_min" in near_keys:
+            inward += np.array([0.0, 1.0])
+
+        # y_max 벽에 붙음 → -y 방향으로 탈출
+        if "y_max" in near_keys:
+            inward += np.array([0.0, -1.0])
+
+        norm = np.linalg.norm(inward)
+        if norm < 1e-9:
+            return False, None, {
+                "distances": distances,
+                "near_keys": near_keys,
+                "min_gap": min(distances.values()),
+            }
+
+        inward = inward / norm
+
+        return True, inward, {
+            "distances": distances,
+            "near_keys": near_keys,
+            "min_gap": min(distances.values()),
+        }
+
+
+    def _make_escape_candidates(self, cue_pos):
+        """벽에 붙은 큐볼을 테이블 중앙 쪽으로 빼내는 escape shot 후보 생성."""
+        near_wall, inward_dir, wall_info = self._detect_cue_wall_proximity(cue_pos)
+
+        if not near_wall:
+            return []
+
+        cue = np.array(cue_pos).flatten()
+        base_angle = np.arctan2(inward_dir[1], inward_dir[0])
+
+        # 중앙 방향 기준으로 약간 좌우 후보도 생성
+        angle_offsets_deg = [0.0, -8.0, 8.0, -15.0, 15.0]
+        speed_list = [
+            ESCAPE_BALL_SPEED,
+            ESCAPE_BALL_SPEED * 0.85,
+            ESCAPE_BALL_SPEED * 1.15,
+        ]
+
+        candidates = []
+
+        print(
+            f"  [EscapeShot] cue near wall: keys={wall_info['near_keys']}, "
+            f"min_gap={wall_info['min_gap']*100:.1f}cm, "
+            f"inward_dir=[{inward_dir[0]:.2f}, {inward_dir[1]:.2f}]"
+        )
+
+        for off_deg in angle_offsets_deg:
+            angle = base_angle + np.radians(off_deg)
+            strike_dir = np.array([np.cos(angle), np.sin(angle)])
+            angle_deg = np.degrees(angle) % 360
+
+            for spd in speed_list:
+                # escape는 포켓 성공 후보가 아니므로 score는 일반 포켓 성공보다 낮게 둔다.
+                # 단, 후보가 없을 때 fallback으로 선택될 수 있게 양수 점수를 준다.
+                score = 5000 - abs(off_deg) * 50
+
+                candidates.append({
+                    "strike_dir": strike_dir,
+                    "strike_speed": MAX_TOOL_SPEED,
+                    "ball_speed": spd,
+                    "score": score,
+                    "angle_deg": angle_deg,
+                    "angle": angle,
+
+                    # escape 전용 필드
+                    "is_escape_shot": True,
+                    "escape_wall_keys": wall_info["near_keys"],
+                    "escape_min_gap": wall_info["min_gap"],
+                    "strike_height_offset": ESCAPE_STRIKE_HEIGHT_OFFSET,
+                    "safe_approach_dist": ESCAPE_SAFE_APPROACH_DIST,
+                    "follow_dist": ESCAPE_FOLLOW_DIST,
+
+                    # pocket candidate 호환 필드
+                    "target_pocketed": False,
+                    "hit_target": False,
+                    "illegal_contact": False,
+                    "cue_scratched": False,
+                    "pocket_idx": -1,
+                    "cue_path": None,
+                    "target_path": None,
+                    "tgt1_path": None,
+                    "tgt2_path": None,
+                    "cushion_count": 0,
+                    "hit_t1": False,
+                    "hit_t2": False,
+                    "events": [],
+                })
+
+        candidates.sort(key=lambda c: -c["score"])
+
+        print(
+            f"  [EscapeShot] generated {len(candidates)} escape candidates, "
+            f"top_angle={candidates[0]['angle_deg']:.1f}deg"
+        )
+
+        return candidates

@@ -77,6 +77,185 @@ BLACK_UPPER = np.array([130, 255, 255])
 # BLACK_LOWER = np.array([35, 80, 50])
 # BLACK_UPPER = np.array([85, 255, 255])
 
+def get_homography_from_aruco(frame):
+    corners, ids, rejected = detector.detectMarkers(frame)
+
+    if ids is None:
+        return None
+
+    ids = ids.flatten()
+    marker_dict = {}
+
+    for marker_corner, marker_id in zip(corners, ids):
+        pts = marker_corner.reshape((4, 2))
+        center = np.mean(pts, axis=0)
+
+        marker_dict[marker_id] = center
+
+    required_ids = [0, 1, 2, 3]
+
+    for rid in required_ids:
+        if rid not in marker_dict:
+            print(rid, marker_dict)
+            return None
+
+    src_pts = np.array([
+        marker_dict[0],  # TL
+        marker_dict[1],  # TR
+        marker_dict[2],  # BR
+        marker_dict[3]   # BL
+    ], dtype=np.float32)
+
+    dst_pts = np.array([
+        [aruco_size/2, aruco_size/2],
+        [DISPLAY_WIDTH - aruco_size/2, aruco_size/2],
+        [DISPLAY_WIDTH - aruco_size/2, DISPLAY_HEIGHT - aruco_size/2],
+        [aruco_size/2, DISPLAY_HEIGHT - aruco_size/2]
+    ], dtype=np.float32) # 수정 필요
+
+    H = cv2.getPerspectiveTransform(
+        src_pts,
+        dst_pts
+    )
+
+    return H
+
+def remove_corner_regions(mask):
+    cleaned = mask.copy()
+
+    pad = 60
+
+    h, w = cleaned.shape
+
+    # TL
+    cleaned[0:pad, 0:pad] = 0
+
+    # TR
+    cleaned[0:pad, w-pad:w] = 0
+
+    # BR
+    cleaned[h-pad:h, w-pad:w] = 0
+
+    # BL
+    cleaned[h-pad:h, 0:pad] = 0
+
+    return cleaned
+
+def pixel_to_table(cx, cy):
+    table_x = (
+        cx / DISPLAY_WIDTH
+    ) * TABLE_WIDTH_MM
+
+    table_y = (
+        (DISPLAY_HEIGHT - cy)
+        / DISPLAY_HEIGHT
+    ) * TABLE_HEIGHT_MM
+
+    return table_x, table_y
+
+def detect_ball_fixed(mask, frame, color):
+
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (15, 15)
+    )
+
+    mask = cv2.morphologyEx(
+        mask,
+        cv2.MORPH_CLOSE,
+        kernel,
+        iterations=2
+    )
+
+    contours, _ = cv2.findContours(
+        mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    best_ball = None
+    max_score = 0
+
+    for cnt in contours:
+        hull = cv2.convexHull(cnt)
+        area = cv2.contourArea(hull)
+
+        if area < 100:
+            continue
+
+        perimeter = cv2.arcLength(hull, True)
+
+        if perimeter == 0:
+            continue
+
+        (circle_cx, circle_cy), radius = \
+            cv2.minEnclosingCircle(hull)
+
+        circle_area = np.pi * radius * radius
+
+        fill_ratio = area / circle_area
+
+        if fill_ratio < 0.35:
+            continue
+
+        M = cv2.moments(hull)
+
+        if M["m00"] == 0:
+            continue
+
+        cx = M["m10"] / M["m00"]
+        cy = M["m01"] / M["m00"]
+
+        table_x, table_y = pixel_to_table(cx, cy)
+
+        score = area
+        if score > max_score:
+            max_score = score
+            best_ball = {
+                "position": (
+                    float(table_x),
+                    float(table_y)
+                ),
+                "center": (cx, cy),
+                "radius": radius,
+                "hull": hull
+            }
+
+    if best_ball is not None:
+        cx, cy = best_ball["center"]
+        radius = best_ball["radius"]
+
+        draw_cx = int(round(cx))
+        draw_cy = int(round(cy))
+
+        cv2.circle(
+            frame,
+            (draw_cx, draw_cy),
+            int(round(radius)),
+            color,
+            3
+        )
+
+        cv2.circle(
+            frame,
+            (draw_cx, draw_cy),
+            4,
+            (255, 0, 0),
+            -1
+        )
+
+        cv2.drawContours(
+            frame,
+            [best_ball["hull"]],
+            -1,
+            (0, 255, 0),
+            2
+        )
+
+        return best_ball["position"]
+
+    return None
+
 
 def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 빨, 검] = {False if not pocketed else True}
     # Calibration Load
@@ -109,6 +288,25 @@ def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 
 
     profile = pipeline.start(config)
 
+    # RGB 센서 설정 (노출, 화이트밸런스, 게인 고정)
+    rgb_sensor = None
+    for sensor in profile.get_device().query_sensors():
+        if sensor.get_info(rs.camera_info.name) == 'RGB Camera':
+            rgb_sensor = sensor
+            break
+
+    # if rgb_sensor is not None:
+    #     rgb_sensor.set_option(rs.option.enable_auto_exposure, 0)
+    #     rgb_sensor.set_option(rs.option.enable_auto_white_balance, 0)
+    #     rgb_sensor.set_option(rs.option.exposure, 70.0)
+    #     rgb_sensor.set_option(rs.option.white_balance, 4500)
+    #     rgb_sensor.set_option(rs.option.gain, 64)
+    
+    print("Realsense initialized and configured.")
+    print("Exposure:", rgb_sensor.get_option(rs.option.exposure))
+    print("White Balance:", rgb_sensor.get_option(rs.option.white_balance))
+    print("Gain:", rgb_sensor.get_option(rs.option.gain))
+
     # calibration 적용
     newK, roi = cv2.getOptimalNewCameraMatrix(
         K,
@@ -133,265 +331,24 @@ def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 
     depth_scale = depth_sensor.get_depth_scale()
     print("Depth Scale:", depth_scale)
 
-
-    def get_homography_from_aruco(frame):
-        corners, ids, rejected = detector.detectMarkers(frame)
-
-        if ids is None:
-            return None
-
-        ids = ids.flatten()
-        marker_dict = {}
-
-        for marker_corner, marker_id in zip(corners, ids):
-            pts = marker_corner.reshape((4, 2))
-            center = np.mean(pts, axis=0)
-
-            marker_dict[marker_id] = center
-
-        required_ids = [0, 1, 2, 3]
-
-        for rid in required_ids:
-            if rid not in marker_dict:
-                print(rid, marker_dict)
-                return None
-
-        src_pts = np.array([
-            marker_dict[0],  # TL
-            marker_dict[1],  # TR
-            marker_dict[2],  # BR
-            marker_dict[3]   # BL
-        ], dtype=np.float32)
-
-        dst_pts = np.array([
-            [aruco_size/2, aruco_size/2],
-            [DISPLAY_WIDTH - aruco_size/2, aruco_size/2],
-            [DISPLAY_WIDTH - aruco_size/2, DISPLAY_HEIGHT - aruco_size/2],
-            [aruco_size/2, DISPLAY_HEIGHT - aruco_size/2]
-        ], dtype=np.float32) # 수정 필요
-
-        H = cv2.getPerspectiveTransform(
-            src_pts,
-            dst_pts
-        )
-
-        return H
-
-    def remove_corner_regions(mask):
-        cleaned = mask.copy()
-
-        pad = 60
-
-        h, w = cleaned.shape
-
-        # TL
-        cleaned[0:pad, 0:pad] = 0
-
-        # TR
-        cleaned[0:pad, w-pad:w] = 0
-
-        # BR
-        cleaned[h-pad:h, w-pad:w] = 0
-
-        # BL
-        cleaned[h-pad:h, 0:pad] = 0
-
-        return cleaned
-
-    def pixel_to_table(cx, cy):
-        table_x = (
-            cx / DISPLAY_WIDTH
-        ) * TABLE_WIDTH_MM
-
-        table_y = (
-            (DISPLAY_HEIGHT - cy)
-            / DISPLAY_HEIGHT
-        ) * TABLE_HEIGHT_MM
-
-        return table_x, table_y
-
-    def detect_ball(mask, frame, color):
-        contours, _ = cv2.findContours(
-            mask,
-            cv2.RETR_EXTERNAL,
-            cv2.CHAIN_APPROX_SIMPLE
-        )
-
-        best_ball = None
-        max_area = 0
-
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-
-            # 너무 작은 건 제거
-            # 숫자 흰색 원 제거용
-            if area < 100:
-                continue
-
-            perimeter = cv2.arcLength(cnt, True)
-
-            if perimeter == 0:
-                continue
-
-            circularity = (
-                4 * np.pi * area /
-                (perimeter * perimeter)
-            )
-
-            if circularity < 0.7:
-                continue
-
-            x, y, w, h = cv2.boundingRect(cnt)
-
-            bbox_area = w * h
-
-            # 가장 큰 객체만 선택
-            if bbox_area > max_area:
-                max_area = bbox_area
-
-                (cx, cy), radius = cv2.minEnclosingCircle(cnt)
-
-                # cx = int(cx)
-                # cy = int(cy)
-
-                table_x, table_y = pixel_to_table(cx, cy)
-
-                best_ball = {
-                    "position": (
-                        float(table_x),
-                        float(table_y)
-                    ),
-                    "center": (cx, cy),
-                    "radius": radius
-                }
-
-        if best_ball is not None:
-            cx, cy = best_ball["center"]
-            radius = best_ball["radius"]
-
-            draw_cx = int(cx)
-            draw_cy = int(cy)   
-
-            cv2.circle(
-                frame,
-                (draw_cx, draw_cy),
-                int(radius),
-                color,
-                3
-            )
-
-            return best_ball["position"]
-
-        return None
-
-    def detect_ball_fixed(mask, frame, color):
-
-        kernel = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE,
-            (15, 15)
-        )
-
-        mask = cv2.morphologyEx(
-            mask,
-            cv2.MORPH_CLOSE,
-            kernel,
-            iterations=2
-        )
-
-        contours, _ = cv2.findContours(
-            mask,
-            cv2.RETR_EXTERNAL,
-            cv2.CHAIN_APPROX_SIMPLE
-        )
-
-        best_ball = None
-        max_score = 0
-
-        for cnt in contours:
-            hull = cv2.convexHull(cnt)
-            area = cv2.contourArea(hull)
-
-            if area < 100:
-                continue
-
-            perimeter = cv2.arcLength(hull, True)
-
-            if perimeter == 0:
-                continue
-
-            (circle_cx, circle_cy), radius = \
-                cv2.minEnclosingCircle(hull)
-
-            circle_area = np.pi * radius * radius
-
-            fill_ratio = area / circle_area
-
-            if fill_ratio < 0.35:
-                continue
-
-            M = cv2.moments(hull)
-
-            if M["m00"] == 0:
-                continue
-
-            cx = M["m10"] / M["m00"]
-            cy = M["m01"] / M["m00"]
-
-            table_x, table_y = pixel_to_table(cx, cy)
-
-            score = area
-            if score > max_score:
-                max_score = score
-                best_ball = {
-                    "position": (
-                        float(table_x),
-                        float(table_y)
-                    ),
-                    "center": (cx, cy),
-                    "radius": radius,
-                    "hull": hull
-                }
-
-        if best_ball is not None:
-            cx, cy = best_ball["center"]
-            radius = best_ball["radius"]
-
-            draw_cx = int(round(cx))
-            draw_cy = int(round(cy))
-
-            cv2.circle(
-                frame,
-                (draw_cx, draw_cy),
-                int(round(radius)),
-                color,
-                3
-            )
-
-            cv2.circle(
-                frame,
-                (draw_cx, draw_cy),
-                4,
-                (255, 0, 0),
-                -1
-            )
-
-            cv2.drawContours(
-                frame,
-                [best_ball["hull"]],
-                -1,
-                (0, 255, 0),
-                2
-            )
-
-            return best_ball["position"]
-
-        return None
-
     # 초기 프레임 잡기(더미 촬영)
-    for _ in range(30):
+    for _ in range(100):
         pipeline.wait_for_frames()
 
+    import time
+
+    timeout_sec = 10.0
+    start_time = time.time()
+
+    check_detected = [False, False, False] # 노, 빨, 검
     while True:
+        if time.time() - start_time > timeout_sec :
+            print("Detection timeout")
+            pipeline.stop()
+            cv2.destroyAllWindows()
+            res = [not x for x in check_detected]
+            return None, res[0], res[1], res[2]
+
         frames = pipeline.wait_for_frames()
         aligned_frames = align.process(frames)
         color_frame = aligned_frames.get_color_frame()
@@ -415,7 +372,7 @@ def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 
 
         # cv2.imshow("raw", color_image)
         # cv2.imshow("undistorted", undistorted)
-        # cv2.waitKey(0)
+        # cv2.waitKey(1)
         # cv2.destroyAllWindows()
 
         depth_image = np.asanyarray(
@@ -433,7 +390,7 @@ def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 
         )
 
         if H is None:
-            print("Need ArUco markers 0,1,2,3")
+            #print("Need ArUco markers 0,1,2,3")
             continue
 
         warped_color = cv2.warpPerspective(
@@ -526,25 +483,31 @@ def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 
             warped_color,
             (0, 0, 255)
         ) if ball_pocketed[1] is False else None
+        check_detected[1] = True if (ball_pocketed[1] is True or red_ball is not None or check_detected[1] is True) else False
 
         yellow_ball = detect_ball_fixed(
             yellow_mask,
             warped_color,
             (0, 255, 255)
         ) if ball_pocketed[0] is False else None
+        check_detected[0] = True if (ball_pocketed[0] is True or yellow_ball is not None or check_detected[0] is True) else False
 
         black_ball = detect_ball_fixed(
             black_mask,
             warped_color,
             (0, 0, 0)
         ) if ball_pocketed[2] is False else None
+        check_detected[2] = True if (ball_pocketed[2] is True or black_ball is not None or check_detected[2] is True) else False
 
+        # cv2.imshow("raw", undistorted)
         cv2.imshow("Warped Result", warped_color)
         cv2.imshow("red", red_mask)
         cv2.imshow("yellow", yellow_mask)
         cv2.imshow("white", white_mask)
         cv2.imshow("black", black_mask)
-
+        cv2.waitKey(1)
+        
+        print(white_ball, red_ball, yellow_ball, black_ball)
         # 세 공 모두 검출 성공
         if (
             white_ball is not None and
@@ -557,9 +520,6 @@ def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 
             cv2.waitKey(0)
             pipeline.stop()
             cv2.destroyAllWindows()
-            break
-
-        if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
     white_ball = [
@@ -597,7 +557,7 @@ def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 
     thickness = 0.03
 
     center = np.array([CX, CY, H])
-    x_offset = 0.3 + L + 2 * thickness
+    x_offset = 0.35 + L + 2 * thickness
     y_offset = (W + 2 * thickness) / 2 - float(center[1])  # 기본 좌표 변환
 
     cue_pos = [x_offset - float(white_ball[1]), float(white_ball[0]) - y_offset, float(ball_h)]
@@ -609,11 +569,11 @@ def detect_balls(ball_pocketed=[False, False, False]) : # ball_pocketed = [노, 
         if pos is not None :
             x = pos[0]
             y = pos[1]
-            if abs(x - (CX + L/2 - MAZE_BALL_RADIUS)) < 1e-6 : pos[0] = CX + L/2 - MAZE_BALL_RADIUS
-            elif abs(x - (CX - L/2 + MAZE_BALL_RADIUS)) < 1e-6 : pos[0] = CX - L/2 + MAZE_BALL_RADIUS
+            if x > (CX + L/2 - MAZE_BALL_RADIUS) : pos[0] = CX + L/2 - MAZE_BALL_RADIUS
+            elif x < (CX - L/2 + MAZE_BALL_RADIUS) : pos[0] = CX - L/2 + MAZE_BALL_RADIUS
 
-            if abs(y - (CY + W/2 - MAZE_BALL_RADIUS)) < 1e-6 : pos[1] = CY + W/2 - MAZE_BALL_RADIUS
-            elif abs(y - (CY - W/2 + MAZE_BALL_RADIUS)) < 1e-6 : pos[1] = CY - W/2 + MAZE_BALL_RADIUS
+            if y > (CY + W/2 - MAZE_BALL_RADIUS) : pos[1] = CY + W/2 - MAZE_BALL_RADIUS
+            elif y < (CY - W/2 + MAZE_BALL_RADIUS) : pos[1] = CY - W/2 + MAZE_BALL_RADIUS
 
     # 캘리브레이션 오프셋 자동 적용
     pos_offset = load_position_offset()
@@ -672,7 +632,6 @@ def wait_real_balls_stop(interval=0.5, threshold_mm=3.0, max_wait=10.0, verbose=
     if verbose:
         print(f"  [STOP] 타임아웃 ({max_wait}초), 마지막 위치 반환")
     return prev if prev is not None else detect_balls(ball_pocketed)
-
 
 if __name__ == "__main__":
     result = detect_balls()
