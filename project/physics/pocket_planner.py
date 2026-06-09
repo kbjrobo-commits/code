@@ -91,7 +91,8 @@ class PocketShotPlanner:
         CH = MAZE_CUSHION_HEIGHT
         top_z = center[2] + TH / 2 + CH / 2
         thickness = 0.03
-        gap = POCKET_RADIUS * 1.6  # 시뮬 마진: 좁은 갭에서도 확실히 들어가는 각도만 선택
+        gap = POCKET_RADIUS * 1.6  # 코너 포켓: 보수적 마진
+        gap_side = POCKET_RADIUS * 3.0  # 사이드 포켓: 실제 테이블처럼 넓게 개방
 
         x_min, x_max = CX - L / 2, CX + L / 2
         y_min, y_max = CY - W / 2, CY + W / 2
@@ -114,8 +115,8 @@ class PocketShotPlanner:
             _add([x_max - gap - seg_len / 2, y_pos, top_z],
                  [seg_len / 2, thickness / 2, CH / 2])
 
-        # 좌/우변: 코너2 + 사이드1 갭 → 2세그먼트
-        seg_len_side = (W - 2 * gap - gap) / 2
+        # 좌/우변: 코너2 갭 + 사이드1 갭(넓음) → 2세그먼트
+        seg_len_side = (W - 2 * gap - gap_side) / 2
         for x_pos in [x_min - thickness / 2, x_max + thickness / 2]:
             _add([x_pos, y_min + gap + seg_len_side / 2, top_z],
                  [thickness / 2, seg_len_side / 2, CH / 2])
