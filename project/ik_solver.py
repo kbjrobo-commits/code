@@ -207,7 +207,23 @@ class IKSolver:
                 q_i = self.solve_step(q_i, T_goal)
             q_trajectory.append(q_i.copy())
 
-            # validate_from 이전은 IK만 풀고 검증 건너뜀 (고공 접근구간 등)
+            # ── 도구팁 벽 뚫림 검사: 모든 웨이포인트에서 항상 수행 ──
+            # 상공(Z > 테이블+10cm)은 벽 위를 지나가므로 제외
+            if table_bounds is not None:
+                R_ee = T_goal[:3, :3]
+                ee_pos = T_goal[:3, 3]
+                tool_tip = ee_pos + R_ee @ np.array([TOOL_HORIZONTAL_EXT, 0, -TOOL_VERTICAL_DROP])
+                tip_z_threshold = MAZE_TABLE_SURFACE_HEIGHT + MAZE_TABLE_HEIGHT / 2 + 0.10
+                if tool_tip[2] < tip_z_threshold:
+                    margin = 0.005  # 5mm — 벽 뚫림은 절대 허용 안 함
+                    if (tool_tip[0] < table_bounds['x_min'] - margin or
+                        tool_tip[0] > table_bounds['x_max'] + margin or
+                        tool_tip[1] < table_bounds['y_min'] - margin or
+                        tool_tip[1] > table_bounds['y_max'] + margin):
+                        issues.append(
+                            f"[pt {idx}] 도구팁 테이블밖: tip=({tool_tip[0]:.3f},{tool_tip[1]:.3f},{tool_tip[2]:.3f})")
+
+            # validate_from 이전은 나머지 검증 건너뜀 (고공 접근구간 등)
             if idx < validate_from:
                 q_prev = q_i.copy()
                 continue
@@ -238,22 +254,6 @@ class IKSolver:
             if dq > dq_max:
                 issues.append(
                     f"[pt {idx}] joint jump: max dq={np.degrees(dq):.1f}deg > {np.degrees(dq_max):.1f}deg")
-
-            # 5. 도구 팁이 테이블 범위 안에 있는지 검사 (blocking)
-            #    도구 팁 = EE_pos + R_ee @ [TOOL_HORIZONTAL_EXT, 0, -TOOL_VERTICAL_DROP]
-            #    벽에 붙은 공을 평행하게 칠 때 팁이 약간 벽 밖으로 나갈 수 있으므로
-            #    마진을 20mm로 넉넉하게 설정
-            if table_bounds is not None:
-                R_ee = T_goal[:3, :3]
-                ee_pos = T_goal[:3, 3]
-                tool_tip = ee_pos + R_ee @ np.array([TOOL_HORIZONTAL_EXT, 0, -TOOL_VERTICAL_DROP])
-                margin = 0.02  # 20mm 마진 (벽에 붙은 공 평행 타격 허용)
-                if (tool_tip[0] < table_bounds['x_min'] - margin or
-                    tool_tip[0] > table_bounds['x_max'] + margin or
-                    tool_tip[1] < table_bounds['y_min'] - margin or
-                    tool_tip[1] > table_bounds['y_max'] + margin):
-                    issues.append(
-                        f"[pt {idx}] 도구팁 테이블밖: tip=({tool_tip[0]:.3f},{tool_tip[1]:.3f})")
 
             q_prev = q_i.copy()
 
